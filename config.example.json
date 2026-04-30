@@ -1,0 +1,9 @@
+{
+  "paths": {
+    "movies": "~/Videos/movies",
+    "shows":  "~/Videos/shows"
+  },
+  "tmdb":        { "read_token": "" },
+  "jellyfin":    { "url": "http://localhost:8096", "api_key": "" },
+  "qbittorrent": { "user": "admin", "pass": "adminadmin" }
+}
