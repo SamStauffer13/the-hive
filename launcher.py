@@ -88,20 +88,30 @@ class TheHive(Gtk.ApplicationWindow):
     # ── Data loading ───────────────────────────────────────────────────
 
     def _load_all_async(self):
+        LOADERS = [
+            ('yt',     get_youtube_videos),
+            ('walls',  get_wallpapers),
+            ('movies', get_local_movies),
+            ('shows',  get_local_shows),
+            ('steam',  get_steam_games),
+        ]
+        results = {}
+        ordered = []
         with ThreadPoolExecutor(max_workers=5) as ex:
-            f_steam  = ex.submit(get_steam_games)
-            f_movies = ex.submit(get_local_movies)
-            f_shows  = ex.submit(get_local_shows)
-            f_walls  = ex.submit(get_wallpapers)
-            f_yt     = ex.submit(get_youtube_videos)
-            steam  = f_steam.result()
-            movies = f_movies.result()
-            shows  = f_shows.result()
-            walls  = f_walls.result()
-            yt     = f_yt.result()
+            futures = {ex.submit(fn): key for key, fn in LOADERS}
+            for future in as_completed(futures):
+                key = futures[future]
+                results[key] = future.result()
+                ordered = []
+                for k, _ in LOADERS:
+                    if k in results:
+                        ordered.extend(results[k])
+                GLib.idle_add(self._on_data_loaded, ordered)
 
-        all_items = yt + walls + movies + shows + steam
-        GLib.idle_add(self._on_data_loaded, all_items)
+        # Post-load side effects — same as before, just use results dict
+        yt    = results.get('yt', [])
+        steam = results.get('steam', [])
+        all_items = ordered  # final ordered list from last iteration
 
         missing_thumbs = [v for v in yt if not v['artwork']]
         if missing_thumbs:
@@ -122,7 +132,9 @@ class TheHive(Gtk.ApplicationWindow):
     def _on_data_loaded(self, all_items):
         self._all_items = all_items
         if not self.grid.query:
-            self.grid.set_items(all_items)
+            first_load = len(self.grid.all_items) == 0
+            sel = self.grid.selected if not first_load else 0
+            self.grid.set_items(all_items, selected=sel, keep_cache=not first_load)
         return False
 
     def _poll_game_states(self):

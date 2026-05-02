@@ -585,19 +585,24 @@ class HiveGrid(Gtk.DrawingArea):
             return self.all_items[self.visible[self.selected]], self.selected
         return None, -1
 
-    def set_items(self, items, selected=0):
+    def set_items(self, items, selected=0, keep_cache=False):
         self.all_items   = items
         self.visible     = list(range(len(items)))
         self.selected    = min(selected, max(0, len(items) - 1))
         self._matched = set()
         self.query    = ""
-        self._pb_cache.clear()
-        self._scaled_cache.clear()
+        if not keep_cache:
+            self._pb_cache.clear()
+            self._scaled_cache.clear()
         self._invalidate_layout()
         self._update_size()
         self._update_pan()
         self.queue_draw()
-        if any(item.get('artwork') for item in items):
+        if keep_cache:
+            new_items = [item for item in items if id(item) not in self._pb_cache and item.get('artwork')]
+            if new_items:
+                threading.Thread(target=self._load_pixbufs_async, args=(new_items,), daemon=True).start()
+        elif any(item.get('artwork') for item in items):
             threading.Thread(target=self._load_pixbufs_async, args=(items,), daemon=True).start()
 
     def filter(self, query):
