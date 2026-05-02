@@ -72,7 +72,7 @@ class TheHive(Gtk.ApplicationWindow):
         grid_scroll = Gtk.ScrolledWindow()
         grid_scroll.set_vexpand(True)
         grid_scroll.set_hexpand(True)
-        grid_scroll.set_policy(Gtk.PolicyType.EXTERNAL, Gtk.PolicyType.EXTERNAL)
+        grid_scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.NEVER)
         grid_scroll.set_child(self.grid)
 
         self.set_child(grid_scroll)

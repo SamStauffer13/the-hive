@@ -2,8 +2,6 @@
 
 Two features, one interface.
 
----
-
 ## Omni Launcher
 
 Fullscreen honeycomb grid of local content with cover art and fuzzy search.
@@ -14,48 +12,16 @@ Fullscreen honeycomb grid of local content with cover art and fuzzy search.
 
 Type a query → search TMDB, Steam Store, and book databases → select a result → `Enter` sends it to qBittorrent.
 
----
-
 ## Install
 
-**System dependencies** (GTK4 + PyGObject — not pip-installable):
-
 ```bash
-# Arch / SteamOS
 sudo pacman -S python-gobject gtk4
-
-# Ubuntu / Debian
-sudo apt install python3-gi python3-gi-cairo gir1.2-gtk-4.0
-
-# Fedora
-sudo dnf install python3-gobject gtk4
-```
-
-**Config:**
-
-```bash
-mkdir -p ~/.config/the-hive
-cp config.example.json ~/.config/the-hive/config.json
-# edit ~/.config/the-hive/config.json
-```
-
-**Run:**
-
-```bash
-python the-hive.py
-```
-
-To point at a different config file:
-
-```bash
 HIVE_CONFIG=/path/to/config.json python the-hive.py
 ```
 
----
-
 ## Config
 
-`~/.config/the-hive/config.json` — all fields are optional. Omitted sections simply produce no content in the launcher.
+`~/.config/the-hive/config.json` — all fields optional.
 
 ```json
 {
@@ -69,24 +35,14 @@ HIVE_CONFIG=/path/to/config.json python the-hive.py
 }
 ```
 
-| Key | Purpose |
-|-----|---------|
-| `paths.movies` | Local movie directory — scanned for video files |
-| `paths.shows` | Local shows directory — scanned for season folders |
-| `tmdb.read_token` | [TMDB API](https://www.themoviedb.org/settings/api) read token — enables Omni Search |
-| `jellyfin` | Jellyfin server — used for streaming movies via URL |
-| `qbittorrent` | qBittorrent WebUI credentials — receives torrents from Omni Search |
-
----
-
 ## Structure
 
 ```
 the-hive/
   the-hive.py         # entry point
   constants.py        # types, colors, draw params
-  config.py           # reads ~/.config/the-hive/config.json
-  cache.py            # download_image, load_queue, save_queue
+  config.py           # reads config.json
+  cache.py            # image download + queue helpers
   launcher.py         # TheHive window — orchestrates everything
   data/
     steam.py          # Steam library + CDN artwork
@@ -100,13 +56,11 @@ the-hive/
     steam_store.py    # Steam store search
     qbit.py           # qBittorrent client
   ui/
-    hex_geometry.py   # pure math, no GTK — positions, paths, caches
-    grid.py           # HiveGrid drawing area — main honeycomb
+    hex_geometry.py   # pure math — positions, paths, caches
+    grid.py           # HiveGrid drawing area
     search_overlay.py # search result tiles + state
     preview.py        # video preview frames + animation
 ```
-
----
 
 ## Optional dependencies
 
@@ -116,14 +70,3 @@ the-hive/
 | `ffmpeg` | extracting video preview frames |
 | `steam` | launching games, unsubscribing wallpapers |
 | `linux-wallpaperengine` | animated wallpapers from Workshop |
-
-All are optional — missing tools are silently skipped.
-
----
-
-## Principles
-
-- **Two domains** — Launcher (local) and Search (online) never share state
-- **Atomic modules** — each file does one thing, readable in isolation
-- **No inline clients** — all API calls live in `search/`, never in the controller
-- **Pure geometry** — `hex_geometry.py` has zero GTK imports

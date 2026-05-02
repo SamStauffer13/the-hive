@@ -39,7 +39,8 @@ class HiveGrid(Gtk.DrawingArea):
         self._pos_cache_key = None
         self._petal_cache     = {}   # slot → ring_number (1-based)
         self._petal_cache_key = None
-        self._scroll_y      = 0
+        self._pan_x         = 0.0
+        self._pan_y         = 0.0
         self._hovered       = -1
 
         self._matched = set()
@@ -136,12 +137,49 @@ class HiveGrid(Gtk.DrawingArea):
 
     def _update_size(self):
         vw, vh = self._viewport_size()
-        n = len(self.all_items) if self.query else len(self.visible)
-        h = content_height(n, vw, vh)
-        if self.search.is_active():
-            h = max(h, vh)
         self.set_content_width(vw)
-        self.set_content_height(h)
+        self.set_content_height(vh)
+
+    # ── Pan ────────────────────────────────────────────────────────────
+
+    def _update_pan(self):
+        """Shift the grid so the selected cell is centered, clamped so no empty edges."""
+        vw, vh = self._viewport_size()
+        pos, r = self._get_positions()
+        if not pos:
+            self._pan_x = self._pan_y = 0.0
+            return
+
+        if self.query:
+            idx = self.visible[self.selected] if 0 <= self.selected < len(self.visible) else -1
+        else:
+            idx = self.selected
+
+        if 0 <= idx < len(pos):
+            cx, cy   = pos[idx]
+            pan_x    = vw / 2 - cx
+            pan_y    = vh / 2 - cy
+        else:
+            pan_x = pan_y = 0.0
+
+        # Clamp so the grid always fills the viewport — no black edges
+        xs = [p[0] for p in pos]
+        ys = [p[1] for p in pos]
+        gx0, gx1 = min(xs) - r, max(xs) + r   # grid bounds in cell space
+        gy0, gy1 = min(ys) - r, max(ys) + r
+
+        if gx1 - gx0 >= vw:
+            pan_x = max(vw - gx1, min(-gx0, pan_x))
+        else:
+            pan_x = (vw - (gx1 - gx0)) / 2 - gx0
+
+        if gy1 - gy0 >= vh:
+            pan_y = max(vh - gy1, min(-gy0, pan_y))
+        else:
+            pan_y = (vh - (gy1 - gy0)) / 2 - gy0
+
+        self._pan_x = pan_x
+        self._pan_y = pan_y
 
     # ── Drawing ────────────────────────────────────────────────────────
 
@@ -150,23 +188,16 @@ class HiveGrid(Gtk.DrawingArea):
         cr.paint()
 
         vw, vh = self._viewport_size()
-        sy = 0
-        vp = self.get_parent()
-        if vp:
-            sw = vp.get_parent()
-            if isinstance(sw, Gtk.ScrolledWindow):
-                sy = sw.get_vadjustment().get_value()
-        self._scroll_y = sy
 
         if self.search.is_active():
-            self._draw_grid_dim(cr, vw, vh, sy)
-            self.search.draw(cr, vw, vh, sy)
-            self._draw_search_bar(cr, vw, vh, sy)
+            self._draw_grid_dim(cr, vw, vh)
+            self.search.draw(cr, vw, vh, 0)
+            self._draw_search_bar(cr, vw, vh)
             return
 
         if self.query:
-            self._draw_filter_mode(cr, vw, vh, sy)
-            self._draw_search_bar(cr, vw, vh, sy)
+            self._draw_filter_mode(cr, vw, vh)
+            self._draw_search_bar(cr, vw, vh)
             return
 
         pos, r     = self._get_positions()
@@ -174,7 +205,6 @@ class HiveGrid(Gtk.DrawingArea):
         petal_dist = r * math.sqrt(3)
 
         # Petal slots — cached; only recomputed on selection or layout change
-        # dict: slot → ring_number (1 = immediate neighbor, 2 = next ring, …)
         petal_key = (self.selected, self._pos_cache_key)
         if self._petal_cache_key != petal_key:
             if 0 <= self.selected < len(pos):
@@ -208,12 +238,16 @@ class HiveGrid(Gtk.DrawingArea):
             if pb_next:
                 flower_pb_next = self._get_flower_pb(pb_next, super_r)
 
+        # Pan so selected cell is always at screen center
+        cr.save()
+        cr.translate(self._pan_x, self._pan_y)
+
         # ── Main grid pass ─────────────────────────────────────────────
         for slot, item_idx in enumerate(self.visible):
             if slot >= len(pos):
                 break
             cx, cy   = pos[slot]
-            if cy + r < sy or cy - r > sy + vh:
+            if cy + self._pan_y + r < 0 or cy + self._pan_y - r > vh:
                 continue
             item     = self.all_items[item_idx]
             selected  = (slot == self.selected)
@@ -294,14 +328,15 @@ class HiveGrid(Gtk.DrawingArea):
         except Exception as e:
             print(f'[hive] overlay draw error: {e}')
 
-        self._draw_search_bar(cr, vw, vh, sy)
+        cr.restore()  # end pan transform
 
-    def _draw_filter_mode(self, cr, vw, vh, sy):
+        self._draw_search_bar(cr, vw, vh)
+
+    def _draw_filter_mode(self, cr, vw, vh):
         """Full grid stays in place. Matched cells bright, unmatched dim."""
         pos, r = self._get_positions()
         cell_r = r - BEVEL
 
-        # Selected item
         sel_item_idx = (
             self.visible[self.selected]
             if self.visible and 0 <= self.selected < len(self.visible)
@@ -312,12 +347,15 @@ class HiveGrid(Gtk.DrawingArea):
         if has_selected:
             sel_cx, sel_cy = pos[sel_item_idx]
 
+        cr.save()
+        cr.translate(self._pan_x, self._pan_y)
+
         # ── Draw all cells ─────────────────────────────────────────────
         for i, item in enumerate(self.all_items):
             if i >= len(pos):
                 break
             cx, cy = pos[i]
-            if cy + r < sy or cy - r > sy + vh:
+            if cy + self._pan_y + r < 0 or cy + self._pan_y - r > vh:
                 continue
 
             matched  = i in self._matched
@@ -370,18 +408,24 @@ class HiveGrid(Gtk.DrawingArea):
             hex_path(cr, sel_cx, sel_cy, cell_r)
             cr.stroke()
 
-    def _draw_grid_dim(self, cr, vw, vh, sy):
+        cr.restore()  # end pan transform
+
+    def _draw_grid_dim(self, cr, vw, vh):
         """Draw all library cells dimmed as a background for the search overlay."""
         n = len(self.all_items)
         if not n:
             return
         pos, r = positions(n, vw, vh)
         cell_r = r - BEVEL
+
+        cr.save()
+        cr.translate(self._pan_x, self._pan_y)
+
         for slot, item in enumerate(self.all_items):
             if slot >= len(pos):
                 break
             cx, cy = pos[slot]
-            if cy + r < sy or cy - r > sy + vh:
+            if cy + self._pan_y + r < 0 or cy + self._pan_y - r > vh:
                 continue
             cr.save()
             hex_path(cr, cx, cy, cell_r)
@@ -399,14 +443,16 @@ class HiveGrid(Gtk.DrawingArea):
             cr.set_source_rgba(*C_BG_DARK)
             cr.paint()
             cr.restore()
+
+        cr.restore()  # end pan transform
         cr.set_source_rgba(0, 0, 0, 0.45)
         cr.paint()
 
-    def _draw_search_bar(self, cr, vw, vh, sy):
+    def _draw_search_bar(self, cr, vw, vh):
         bar_w = vw * 0.58
         bar_h = 78
         cx    = vw / 2
-        cy    = sy + bar_h / 2 + 18
+        cy    = bar_h / 2 + 18
 
         cr.save()
         wide_hex_path(cr, cx, cy, bar_w, bar_h)
@@ -448,10 +494,12 @@ class HiveGrid(Gtk.DrawingArea):
     # ── Interaction ────────────────────────────────────────────────────
 
     def _slot_at(self, x, y):
+        # Convert screen coords to grid space before hit-testing
+        gx, gy = x - self._pan_x, y - self._pan_y
         vw, vh = self._viewport_size()
         r = radius(vh)
         for slot, (cx, cy) in enumerate(self._get_positions()[0]):
-            if math.hypot(x - cx, y - cy) <= r:
+            if math.hypot(gx - cx, gy - cy) <= r:
                 return slot
         return -1
 
@@ -471,7 +519,7 @@ class HiveGrid(Gtk.DrawingArea):
     def _on_click(self, gesture, n_press, x, y):
         if self.search.is_active():
             vw, vh = self._viewport_size()
-            slot = self.search.slot_at(x, y, vw, vh, self._scroll_y)
+            slot = self.search.slot_at(x, y, vw, vh, 0)
             if slot >= 0:
                 self.search.selected = slot
                 self.queue_draw()
@@ -482,12 +530,13 @@ class HiveGrid(Gtk.DrawingArea):
         vw, vh = self._viewport_size()
         r = radius(vh)
         pos_list, _ = self._get_positions()
+        # Convert screen coords to grid space
+        gx, gy = x - self._pan_x, y - self._pan_y
 
         for i, (cx, cy) in enumerate(pos_list):
-            if math.hypot(x - cx, y - cy) > r:
+            if math.hypot(gx - cx, gy - cy) > r:
                 continue
             if self.query:
-                # i is an index into all_items; only act on matched cells
                 if i not in self._matched:
                     return
                 try:
@@ -496,6 +545,7 @@ class HiveGrid(Gtk.DrawingArea):
                     return
                 if vis_idx != self.selected:
                     self.selected = vis_idx
+                    self._update_pan()
                     self.queue_draw()
                 if n_press >= 2:
                     self.activate()
@@ -507,6 +557,7 @@ class HiveGrid(Gtk.DrawingArea):
                     item = self.all_items[self.visible[slot]]
                     if item['type'] in VIDEO_TYPES:
                         self.preview.start(item, slot)
+                    self._update_pan()
                 self.queue_draw()
                 if n_press >= 2:
                     self.activate()
@@ -557,41 +608,8 @@ class HiveGrid(Gtk.DrawingArea):
                 item = self.all_items[self.visible[new]]
                 if item['type'] in VIDEO_TYPES:
                     self.preview.start(item, new)
+            self._update_pan()
             self.queue_draw()
-            self._scroll_to_selected()
-
-    def _scroll_to_selected(self):
-        viewport = self.get_parent()
-        if viewport is None:
-            return
-        scroll = viewport.get_parent()
-        if not isinstance(scroll, Gtk.ScrolledWindow):
-            return
-        pos, r = self._get_positions()
-        # Map selected → position index into full grid when filtering
-        if self.query:
-            if not (0 <= self.selected < len(self.visible)):
-                return
-            pos_idx = self.visible[self.selected]
-        else:
-            pos_idx = self.selected
-        if not (0 <= pos_idx < len(pos)):
-            return
-        cx, cy = pos[pos_idx]
-        hadj   = scroll.get_hadjustment()
-        h_cur  = hadj.get_value()
-        h_page = hadj.get_page_size()
-        if cx - r - 10 < h_cur:
-            hadj.set_value(max(0, cx - r - 10))
-        elif cx + r + 10 > h_cur + h_page:
-            hadj.set_value(cx + r + 10 - h_page)
-        vadj   = scroll.get_vadjustment()
-        v_cur  = vadj.get_value()
-        v_page = vadj.get_page_size()
-        if cy - r - 10 < v_cur:
-            vadj.set_value(max(0, cy - r - 10))
-        elif cy + r + 10 > v_cur + v_page:
-            vadj.set_value(cy + r + 10 - v_page)
 
     # ── Public API ─────────────────────────────────────────────────────
 
@@ -614,6 +632,7 @@ class HiveGrid(Gtk.DrawingArea):
         self._scaled_cache.clear()
         self._invalidate_layout()
         self._update_size()
+        self._update_pan()
         self.queue_draw()
         if any(item.get('artwork') for item in items):
             threading.Thread(target=self._load_pixbufs_async, args=(items,), daemon=True).start()
@@ -640,14 +659,11 @@ class HiveGrid(Gtk.DrawingArea):
             self._matched = set(matched)
             self.visible  = matched
         self.selected = 0
-        # Layout/size only change when entering or leaving filter mode.
-        # During active typing (filter→filter), positions are stable (always all_items).
         if was_filtering != bool(query):
             self._invalidate_layout()
             self._update_size()
+        self._update_pan()
         self.queue_draw()
-        if query and self.visible:
-            GLib.idle_add(self._scroll_to_selected)
 
     def remove_visible(self, slot):
         if not (0 <= slot < len(self.visible)):
@@ -660,4 +676,5 @@ class HiveGrid(Gtk.DrawingArea):
         self.selected = min(self.selected, max(0, len(self.visible) - 1))
         self._invalidate_layout()
         self._update_size()
+        self._update_pan()
         self.queue_draw()
