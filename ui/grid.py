@@ -9,7 +9,7 @@ gi.require_version('Gdk', '4.0')
 from gi.repository import Gtk, Gdk, GdkPixbuf, GLib
 
 from .hex_geometry import (
-    radius, ncols, positions, content_height,
+    radius, ncols, positions,
     hex_path, wide_hex_path, clamp_nav, truncate_text,
     BEVEL,
 )
@@ -143,43 +143,19 @@ class HiveGrid(Gtk.DrawingArea):
     # ── Pan ────────────────────────────────────────────────────────────
 
     def _update_pan(self):
-        """Shift the grid so the selected cell is centered, clamped so no empty edges."""
+        """Always place the selected cell at screen center — no clamping."""
         vw, vh = self._viewport_size()
-        pos, r = self._get_positions()
+        pos, _ = self._get_positions()
         if not pos:
             self._pan_x = self._pan_y = 0.0
             return
-
-        if self.query:
-            idx = self.visible[self.selected] if 0 <= self.selected < len(self.visible) else -1
-        else:
-            idx = self.selected
-
+        idx = self.visible[self.selected] if (self.query and 0 <= self.selected < len(self.visible)) else self.selected
         if 0 <= idx < len(pos):
-            cx, cy   = pos[idx]
-            pan_x    = vw / 2 - cx
-            pan_y    = vh / 2 - cy
+            cx, cy = pos[idx]
+            self._pan_x = vw / 2 - cx
+            self._pan_y = vh / 2 - cy
         else:
-            pan_x = pan_y = 0.0
-
-        # Clamp so the grid always fills the viewport — no black edges
-        xs = [p[0] for p in pos]
-        ys = [p[1] for p in pos]
-        gx0, gx1 = min(xs) - r, max(xs) + r   # grid bounds in cell space
-        gy0, gy1 = min(ys) - r, max(ys) + r
-
-        if gx1 - gx0 >= vw:
-            pan_x = max(vw - gx1, min(-gx0, pan_x))
-        else:
-            pan_x = (vw - (gx1 - gx0)) / 2 - gx0
-
-        if gy1 - gy0 >= vh:
-            pan_y = max(vh - gy1, min(-gy0, pan_y))
-        else:
-            pan_y = (vh - (gy1 - gy0)) / 2 - gy0
-
-        self._pan_x = pan_x
-        self._pan_y = pan_y
+            self._pan_x = self._pan_y = 0.0
 
     # ── Drawing ────────────────────────────────────────────────────────
 

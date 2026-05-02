@@ -19,28 +19,19 @@ def ncols(vw, r):
 
 
 def positions(n, vw, vh):
-    """Return (list of (cx, cy), r) for n items in the main grid."""
+    """Return (list of (cx, cy), r) for n items in world space.
+    No viewport centering — pan handles placing the selected cell at screen center."""
     r      = radius(vh)
     h_step = 1.5 * r
     v_step = math.sqrt(3) * r
     cols   = max(1, int(vw / h_step) + 1)
 
-    first_row = min(n, cols)
-    grid_w    = (first_row - 1) * h_step + 2 * r
-    x_off     = max(0, (vw - grid_w) / 2)
-
-    nrows          = math.ceil(max(1, n) / cols)
-    last_row_count = n - (nrows - 1) * cols
-    max_cy_rel = (nrows - 1) * v_step + (v_step if last_row_count >= 2 else v_step / 2)
-    grid_h    = max_cy_rel - v_step / 2 + 2 * r
-    y_off     = max(0, (vh - grid_h) / 2) - (v_step / 2 - r)
-
     pos = []
     for g_slot in range(n):
         col = g_slot % cols
         row = g_slot // cols
-        cx  = x_off + col * h_step + r
-        cy  = y_off + row * v_step + (col % 2) * (v_step / 2) + v_step / 2
+        cx  = col * h_step + r
+        cy  = row * v_step + (col % 2) * (v_step / 2) + v_step / 2
         pos.append((cx, cy))
     return pos, r
 
