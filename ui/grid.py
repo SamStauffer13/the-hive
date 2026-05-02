@@ -142,9 +142,11 @@ class HiveGrid(Gtk.DrawingArea):
 
     # ── Pan ────────────────────────────────────────────────────────────
 
-    def _update_pan(self):
-        """Always place the selected cell at screen center — no clamping."""
-        vw, vh = self._viewport_size()
+    def _update_pan(self, vw=None, vh=None):
+        """Always place the selected cell at screen center — no clamping.
+        Pass vw/vh explicitly from _draw to guarantee correct dimensions."""
+        if vw is None or vh is None:
+            vw, vh = self._viewport_size()
         pos, _ = self._get_positions()
         if not pos:
             self._pan_x = self._pan_y = 0.0
@@ -163,7 +165,8 @@ class HiveGrid(Gtk.DrawingArea):
         cr.set_source_rgba(*C_BG_DARK)
         cr.paint()
 
-        vw, vh = self._viewport_size()
+        vw, vh = width, height
+        self._update_pan(vw, vh)  # always correct — uses actual draw dimensions
 
         if self.search.is_active():
             self._draw_grid_dim(cr, vw, vh)
