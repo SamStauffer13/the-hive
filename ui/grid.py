@@ -525,15 +525,15 @@ class HiveGrid(Gtk.DrawingArea):
     # ── Navigation ─────────────────────────────────────────────────────
 
     def _navigate_spatial(self, direction):
-        """Snap to the nearest visible match in the given direction."""
+        """Snap to the nearest visible match in the given direction.
+        Falls back to nearest overall if no cell exists in that direction (edge cells)."""
         pos_list, _ = self._get_positions()
         cur_idx = self.visible[self.selected] if 0 <= self.selected < len(self.visible) else -1
         if cur_idx < 0 or cur_idx >= len(pos_list):
             return 0
         cur_cx, cur_cy = pos_list[cur_idx]
 
-        best       = self.selected
-        best_score = float('inf')
+        best, best_score = self.selected, float('inf')
         for vi, item_idx in enumerate(self.visible):
             if item_idx >= len(pos_list) or vi == self.selected:
                 continue
@@ -543,11 +543,20 @@ class HiveGrid(Gtk.DrawingArea):
             if direction == 'right' and dx <= 0: continue
             if direction == 'up'    and dy >= 0: continue
             if direction == 'down'  and dy <= 0: continue
-            # Primary-axis distance + cross-axis penalty
             score = (abs(dx) + abs(dy) * 3) if direction in ('left', 'right') else (abs(dy) + abs(dx) * 3)
             if score < best_score:
-                best_score = score
-                best       = vi
+                best_score, best = score, vi
+
+        if best == self.selected:
+            # Edge cell — no neighbor in requested direction; navigate to nearest overall
+            for vi, item_idx in enumerate(self.visible):
+                if item_idx >= len(pos_list) or vi == self.selected:
+                    continue
+                cx, cy = pos_list[item_idx]
+                dist = math.hypot(cx - cur_cx, cy - cur_cy)
+                if dist < best_score:
+                    best_score, best = dist, vi
+
         return best
 
     def navigate(self, direction):
