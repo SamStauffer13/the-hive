@@ -3,6 +3,7 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+import cairo
 import gi
 gi.require_version('Gtk', '4.0')
 gi.require_version('Gdk', '4.0')
@@ -10,15 +11,15 @@ from gi.repository import Gtk, Gdk, GdkPixbuf, GLib
 
 from .hex_geometry import (
     radius, positions,
-    hex_path, wide_hex_path, truncate_text,
+    hex_path, truncate_text,
     BEVEL,
 )
 from . import scale_pixbuf_for_hex
 from .preview import PreviewManager
 from .search_overlay import SearchOverlay
 from constants import (
-    C_BG_DARK, S_INSTALLED, S_DOWNLOADING, S_NOT_INSTALLED, VIDEO_TYPES,
-    ITEM_ALPHA_UNSELECTED, ALPHA_DOWNLOADING_BASE, PETAL_RINGS,
+    C_BG_DARK, C_PINK, S_INSTALLED, S_DOWNLOADING, S_NOT_INSTALLED, VIDEO_TYPES,
+    ITEM_ALPHA_UNSELECTED, ALPHA_DOWNLOADING_BASE,
 )
 
 
@@ -43,7 +44,8 @@ class HiveGrid(Gtk.DrawingArea):
         self._pan_y         = 0.0
         self._hovered       = -1
 
-        self._matched = set()
+        self._matched     = set()
+        self._petal_rings = 0  # dynamic; Super+/- adjusts at runtime
 
         self.search = SearchOverlay(self.queue_draw)
         self.preview = PreviewManager(self.queue_draw)
@@ -52,7 +54,7 @@ class HiveGrid(Gtk.DrawingArea):
         self.set_draw_func(self._draw, None)
         self._update_size()
 
-        GLib.timeout_add(50, self.preview.pulse)
+        GLib.timeout_add(50, self._pulse)
 
         click = Gtk.GestureClick()
         click.connect('pressed', self._on_click)
@@ -64,6 +66,12 @@ class HiveGrid(Gtk.DrawingArea):
         self.add_controller(motion)
 
         threading.Thread(target=self._load_pixbufs_async, args=(items,), daemon=True).start()
+
+    def _pulse(self):
+        self.preview.pulse()
+        if self.query:
+            self.queue_draw()
+        return True
 
     # ── Pixbuf loading ─────────────────────────────────────────────────
 
@@ -159,53 +167,23 @@ class HiveGrid(Gtk.DrawingArea):
         else:
             self._pan_x = self._pan_y = 0.0
 
-    def _draw_selected_overlay(self, cr, cx, cy, cell_r, item):
-        cr.save()
-        hex_path(cr, cx, cy, cell_r)
-        cr.clip()
-        cr.set_source_rgba(0, 0, 0, 0.68)
-        cr.rectangle(cx - cell_r, cy + cell_r * 0.30, 2 * cell_r, cell_r * 0.80)
-        cr.fill()
-        cr.restore()
-
-        cr.select_font_face('Nova Mono', 0, 0)
-        cr.set_font_size(13)
-        cr.set_source_rgba(1.0, 1.0, 1.0, 1.0)
-        name = truncate_text(cr, item['name'], cell_r * 1.6)
-        te   = cr.text_extents(name)
-        cr.move_to(cx - te.width / 2 - te.x_bearing, cy + cell_r * 0.55)
-        cr.show_text(name)
-
-        cr.set_font_size(9)
-        cr.set_source_rgba(1.0, 1.0, 1.0, 0.70)
-        badge = item['type'].upper()
-        te2   = cr.text_extents(badge)
-        cr.move_to(cx - te2.width / 2 - te2.x_bearing, cy + cell_r * 0.72)
-        cr.show_text(badge)
-
-        cr.set_line_width(2.0)
-        cr.set_source_rgba(1.0, 1.0, 1.0, 0.50)
-        hex_path(cr, cx, cy, cell_r)
-        cr.stroke()
 
     # ── Drawing ────────────────────────────────────────────────────────
 
     def _draw(self, area, cr, width, height, data):
-        cr.set_source_rgba(*C_BG_DARK)
+        cr.save()
+        cr.set_operator(cairo.OPERATOR_CLEAR)
+        cr.paint()
+        cr.restore()
+
+        cr.set_source_rgba(0, 0, 0, 0.20)
         cr.paint()
 
         vw, vh = width, height
         self._update_pan(vw, vh)  # always correct — uses actual draw dimensions
 
-        if self.search.is_active():
-            self._draw_grid_dim(cr, vw, vh)
-            self.search.draw(cr, vw, vh, 0)
-            self._draw_search_bar(cr, vw, vh)
-            return
-
         if self.query:
             self._draw_filter_mode(cr, vw, vh)
-            self._draw_search_bar(cr, vw, vh)
             return
 
         pos, r     = self._get_positions()
@@ -213,7 +191,7 @@ class HiveGrid(Gtk.DrawingArea):
         petal_dist = r * math.sqrt(3)
 
         # Petal slots — cached; only recomputed on selection or layout change
-        petal_key = (self.selected, self._pos_cache_key)
+        petal_key = (self.selected, self._pos_cache_key, self._petal_rings)
         if self._petal_cache_key != petal_key:
             if 0 <= self.selected < len(pos):
                 sel_cx0, sel_cy0 = pos[self.selected]
@@ -223,7 +201,7 @@ class HiveGrid(Gtk.DrawingArea):
                         continue
                     d = math.hypot(cx - sel_cx0, cy - sel_cy0)
                     ring = math.ceil(d / (petal_dist * 1.05))
-                    if ring <= PETAL_RINGS:
+                    if ring <= self._petal_rings:
                         cache[s] = ring
                 self._petal_cache = cache
             else:
@@ -240,7 +218,7 @@ class HiveGrid(Gtk.DrawingArea):
             item = self.all_items[self.visible[self.selected]]
             pb_cur, pb_next, fade_alpha = self.preview.current_frame()
             raw     = pb_cur or self._pb_cache.get(id(item))
-            super_r = petal_dist * PETAL_RINGS + cell_r
+            super_r = petal_dist * self._petal_rings + cell_r
             if raw:
                 flower_pb = self._get_flower_pb(raw, super_r)
             if pb_next:
@@ -264,10 +242,8 @@ class HiveGrid(Gtk.DrawingArea):
             petal_ring = petal_slots.get(slot)   # None if not a petal
             is_petal   = petal_ring is not None
 
-            if selected:
+            if selected or is_petal:
                 alpha = 1.0
-            elif is_petal:
-                alpha = 0.30 / petal_ring        # ring 1→0.30, ring 2→0.15, ring 3→0.10…
             else:
                 alpha = ITEM_ALPHA_UNSELECTED
 
@@ -293,27 +269,17 @@ class HiveGrid(Gtk.DrawingArea):
                 else:
                     cr.paint_with_alpha(alpha)
             else:
+                cr.set_source_rgba(*C_BG_DARK)
+                cr.paint()
                 draw_pb = self._get_scaled(item, cell_r)
                 if draw_pb:
                     Gdk.cairo_set_source_pixbuf(cr, draw_pb,
                         cx - draw_pb.get_width()  / 2,
                         cy - draw_pb.get_height() / 2)
                     cr.paint_with_alpha(alpha)
-                else:
-                    cr.set_source_rgba(*C_BG_DARK)
-                    cr.paint()
             cr.restore()
 
-        try:
-            if 0 <= self.selected < len(pos):
-                item = self.all_items[self.visible[self.selected]]
-                self._draw_selected_overlay(cr, sel_cx, sel_cy, cell_r, item)
-        except Exception as e:
-            print(f'[hive] overlay draw error: {e}')
-
         cr.restore()  # end pan transform
-
-        self._draw_search_bar(cr, vw, vh)
 
     def _draw_filter_mode(self, cr, vw, vh):
         """Full grid stays in place. Matched cells bright, unmatched dim."""
@@ -345,106 +311,43 @@ class HiveGrid(Gtk.DrawingArea):
 
             matched  = i in self._matched
             selected = (i == sel_item_idx)
-            alpha    = 1.0 if selected else (0.88 if matched else 0.08)
+            # Center cell: dim so text reads clearly on top
+            alpha    = 0.30 if selected else (0.88 if matched else 0.08)
 
             cr.save()
             hex_path(cr, cx, cy, cell_r)
             cr.clip()
+            cr.set_source_rgba(*C_BG_DARK)
+            cr.paint()
             pb = self._pb_cache.get(id(item))
             if pb:
                 spb = self._get_scaled(item, cell_r)
                 if spb:
                     Gdk.cairo_set_source_pixbuf(cr, spb, cx - spb.get_width() / 2, cy - spb.get_height() / 2)
                     cr.paint_with_alpha(alpha)
-                    cr.restore()
-                    continue
-            cr.set_source_rgba(*C_BG_DARK)
-            cr.paint()
             cr.restore()
 
         if has_selected:
-            item = self.all_items[sel_item_idx]
-            self._draw_selected_overlay(cr, sel_cx, sel_cy, cell_r, item)
+            self._draw_center_search(cr, sel_cx, sel_cy, cell_r)
 
         cr.restore()  # end pan transform
 
-    def _draw_grid_dim(self, cr, vw, vh):
-        """Draw all library cells dimmed as a background for the search overlay."""
-        if not self.all_items:
-            return
-        pos, r = self._get_positions()
-        cell_r = r - BEVEL
-
-        cr.save()
-        cr.translate(self._pan_x, self._pan_y)
-
-        for slot, item in enumerate(self.all_items):
-            if slot >= len(pos):
-                break
-            cx, cy = pos[slot]
-            if cy + self._pan_y + r < 0 or cy + self._pan_y - r > vh:
-                continue
-            if cx + self._pan_x + r < 0 or cx + self._pan_x - r > vw:
-                continue
-            cr.save()
-            hex_path(cr, cx, cy, cell_r)
-            cr.clip()
-            pb = self._pb_cache.get(id(item))
-            if pb:
-                spb = self._get_scaled(item, cell_r)
-                if spb:
-                    Gdk.cairo_set_source_pixbuf(cr, spb,
-                        cx - spb.get_width()  / 2,
-                        cy - spb.get_height() / 2)
-                    cr.paint_with_alpha(0.22)
-                    cr.restore()
-                    continue
-            cr.set_source_rgba(*C_BG_DARK)
-            cr.paint()
-            cr.restore()
-
-        cr.restore()  # end pan transform
-        cr.set_source_rgba(0, 0, 0, 0.45)
-        cr.paint()
-
-    def _draw_search_bar(self, cr, vw, vh):
-        bar_w = vw * 0.58
-        bar_h = 78
-        cx    = vw / 2
-        cy    = bar_h / 2 + 18
-
-        cr.save()
-        wide_hex_path(cr, cx, cy, bar_w, bar_h)
-        cr.clip()
-        cr.set_source_rgba(*C_BG_DARK)
-        cr.paint()
-        cr.restore()
-
+    def _draw_center_search(self, cr, cx, cy, cell_r):
+        """Query text + blinking cursor inside the center cell."""
+        font_size = max(16, cell_r * 0.32)
         cr.select_font_face('CYBERHYPE', 0, 0)
-        text = self.query if self.query else 'SEARCH'
-        cr.set_font_size(32 if self.query else 22)
-        te = cr.text_extents(text)
-        tx = cx - te.width / 2 - te.x_bearing
-        ty = cy - te.height / 2 - te.y_bearing - (8 if self.query else 0)
+        cr.set_font_size(font_size)
+        text = truncate_text(cr, self.query, cell_r * 1.55)
+        te   = cr.text_extents(text)
+        tx   = cx - te.width / 2 - te.x_bearing
+        ty   = cy - te.height / 2 - te.y_bearing
         cr.set_source_rgba(1.0, 1.0, 1.0, 1.0)
         cr.move_to(tx, ty)
         cr.show_text(text)
 
-        if self.query:
-            n_match = len(self.visible)
-            count_text = f"{n_match} result{'s' if n_match != 1 else ''}" if n_match else "no results"
-            cr.select_font_face('Nova Mono', 0, 0)
-            cr.set_font_size(12)
-            cr.set_source_rgba(1.0, 1.0, 1.0, 0.38)
-            te2 = cr.text_extents(count_text)
-            cr.move_to(cx - te2.width / 2 - te2.x_bearing, cy + 20)
-            cr.show_text(count_text)
-
-        cr.select_font_face('CYBERHYPE', 0, 0)
-        cr.set_font_size(32 if self.query else 22)
-        if int(time.time() * 2) % 2 == 0 and self.query:
-            cur_x = tx + te.x_advance + 5
-            cr.set_source_rgba(1.0, 1.0, 1.0, 0.8)
+        if int(time.time() * 2) % 2 == 0:
+            cur_x = tx + te.x_advance + 3
+            cr.set_source_rgba(*C_PINK)
             cr.set_line_width(2)
             cr.move_to(cur_x, ty - 2)
             cr.line_to(cur_x, ty + te.height + 2)
@@ -525,15 +428,15 @@ class HiveGrid(Gtk.DrawingArea):
     # ── Navigation ─────────────────────────────────────────────────────
 
     def _navigate_spatial(self, direction):
-        """Navigate to the nearest cell in the given direction.
-        Never dead-ends: if no cell lies in that direction, moves to the nearest cell overall."""
+        """Navigate to the nearest cell in the requested half-plane (Euclidean distance).
+        Stays put at edges so every cell is reachable without random jumps."""
         pos_list, _ = self._get_positions()
         cur_idx = self.visible[self.selected] if 0 <= self.selected < len(self.visible) else -1
         if cur_idx < 0 or cur_idx >= len(pos_list):
-            return 0
+            return self.selected
         cur_cx, cur_cy = pos_list[cur_idx]
 
-        best, best_score = self.selected, float('inf')
+        best, best_score = -1, float('inf')
         for vi, item_idx in enumerate(self.visible):
             if item_idx >= len(pos_list) or vi == self.selected:
                 continue
@@ -543,21 +446,16 @@ class HiveGrid(Gtk.DrawingArea):
             if direction == 'right' and dx <= 0: continue
             if direction == 'up'    and dy >= 0: continue
             if direction == 'down'  and dy <= 0: continue
-            score = (abs(dx) + abs(dy) * 3) if direction in ('left', 'right') else (abs(dy) + abs(dx) * 3)
+            score = math.hypot(dx, dy)
             if score < best_score:
                 best_score, best = score, vi
 
-        if best == self.selected:
-            # Edge cell — no neighbor in requested direction; navigate to nearest overall
-            for vi, item_idx in enumerate(self.visible):
-                if item_idx >= len(pos_list) or vi == self.selected:
-                    continue
-                cx, cy = pos_list[item_idx]
-                dist = math.hypot(cx - cur_cx, cy - cur_cy)
-                if dist < best_score:
-                    best_score, best = dist, vi
+        return best if best >= 0 else self.selected
 
-        return best
+    def adjust_petal_rings(self, delta):
+        self._petal_rings = max(0, min(3, self._petal_rings + delta))
+        self._petal_cache_key = None
+        self.queue_draw()
 
     def navigate(self, direction):
         n = len(self.visible)

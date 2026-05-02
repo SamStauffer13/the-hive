@@ -119,7 +119,7 @@ def clamp_nav(direction, current, max_val, cols):
 
 
 def truncate_text(cr, text, max_w):
-    key = (text, round(max_w), round(cr.get_font_size() * 10))
+    key = (text, round(max_w), round(cr.font_extents()[2] * 10))
     cached = _TRUNC_CACHE.get(key)
     if cached is not None:
         return cached

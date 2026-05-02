@@ -31,7 +31,7 @@ C_PINK    = (0.92, 0.33, 0.62, 1.0)
 ITEM_SCALE_SELECTED    = 1.15
 ITEM_ALPHA_UNSELECTED  = 0.50
 ALPHA_DOWNLOADING_BASE = 0.35
-PETAL_RINGS            = 1      # rings of petals shown around hovered cell (1=6, 2=18, 3=36)
+PETAL_RINGS            = 2      # rings of petals shown around selected cell (1=6, 2=18, 3=36)
 SEARCH_DEBOUNCE_MS     = 400
 
 # Video file extensions
