@@ -102,16 +102,12 @@ class TheHive(Gtk.ApplicationWindow):
             for future in as_completed(futures):
                 key = futures[future]
                 results[key] = future.result()
-                ordered = []
-                for k, _ in LOADERS:
-                    if k in results:
-                        ordered.extend(results[k])
+                ordered = [item for k, _ in LOADERS if k in results for item in results[k]]
                 GLib.idle_add(self._on_data_loaded, ordered, priority=GLib.PRIORITY_HIGH_IDLE)
 
-        # Post-load side effects — same as before, just use results dict
-        yt    = results.get('yt', [])
-        steam = results.get('steam', [])
-        all_items = ordered  # final ordered list from last iteration
+        yt        = results.get('yt', [])
+        steam     = results.get('steam', [])
+        all_items = ordered
 
         missing_thumbs = [v for v in yt if not v['artwork']]
         if missing_thumbs:
@@ -132,9 +128,8 @@ class TheHive(Gtk.ApplicationWindow):
     def _on_data_loaded(self, all_items):
         self._all_items = all_items
         if not self.grid.query:
-            first_load = len(self.grid.all_items) == 0
-            sel = self.grid.selected if not first_load else 0
-            self.grid.set_items(all_items, selected=sel, keep_cache=not first_load)
+            sel = self.grid.selected if self.grid.all_items else 0
+            self.grid.set_items(all_items, selected=sel, keep_cache=bool(self.grid.all_items))
         return False
 
     def _poll_game_states(self):

@@ -525,8 +525,8 @@ class HiveGrid(Gtk.DrawingArea):
     # ── Navigation ─────────────────────────────────────────────────────
 
     def _navigate_spatial(self, direction):
-        """Snap to the nearest visible match in the given direction.
-        Falls back to nearest overall if no cell exists in that direction (edge cells)."""
+        """Navigate to the nearest cell in the given direction.
+        Never dead-ends: if no cell lies in that direction, moves to the nearest cell overall."""
         pos_list, _ = self._get_positions()
         cur_idx = self.visible[self.selected] if 0 <= self.selected < len(self.visible) else -1
         if cur_idx < 0 or cur_idx >= len(pos_list):
@@ -595,7 +595,8 @@ class HiveGrid(Gtk.DrawingArea):
             self._pb_cache.clear()
             self._scaled_cache.clear()
         self._invalidate_layout()
-        self._update_size()
+        if not keep_cache:
+            self._update_size()
         self._update_pan()
         self.queue_draw()
         if keep_cache:
