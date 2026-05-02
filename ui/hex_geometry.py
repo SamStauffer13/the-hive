@@ -118,6 +118,20 @@ def clamp_nav(direction, current, max_val, cols):
     return current
 
 
+def axial_round(q_frac, s_frac):
+    """Round fractional axial coordinates to nearest hex cell (cube-rounding)."""
+    r_frac = -q_frac - s_frac
+    q, s, r_ = round(q_frac), round(s_frac), round(r_frac)
+    q_diff = abs(q - q_frac)
+    s_diff = abs(s - s_frac)
+    r_diff = abs(r_ - r_frac)
+    if q_diff > s_diff and q_diff > r_diff:
+        q = -s - r_
+    elif s_diff > r_diff:
+        s = -q - r_
+    return q, s
+
+
 def truncate_text(cr, text, max_w):
     key = (text, round(max_w), round(cr.font_extents()[2] * 10))
     cached = _TRUNC_CACHE.get(key)
