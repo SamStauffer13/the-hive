@@ -9,6 +9,9 @@ _HEX_OFFSETS: dict = {}
 # Cache truncation results — binary-search text_extents → dict lookup
 _TRUNC_CACHE: dict = {}
 
+# Axial directions for hex spiral traversal (flat-top orientation)
+_SPIRAL_DIRS = [(0, -1), (1, -1), (1, 0), (0, 1), (-1, 1), (-1, 0)]
+
 
 def radius(vh):
     return max(40, vh / (math.sqrt(3) * (ROWS + 0.5)))
@@ -19,30 +22,29 @@ def ncols(vw, r):
 
 
 def positions(n, vw, vh):
-    """Return (list of (cx, cy), r) for n items in world space.
-    No viewport centering — pan handles placing the selected cell at screen center."""
-    r      = radius(vh)
-    h_step = 1.5 * r
-    v_step = math.sqrt(3) * r
-    cols   = max(1, int(vw / h_step) + 1)
+    """Return (list of (cx, cy), r) in a hex spiral centered at world origin.
+    Cell 0 at (0,0), cells 1-6 form ring 1, cells 7-18 ring 2, etc.
+    Pan maps the selected cell to screen center — no viewport offset here."""
+    r = radius(vh)
 
-    pos = []
-    for g_slot in range(n):
-        col = g_slot % cols
-        row = g_slot // cols
-        cx  = col * h_step + r
-        cy  = row * v_step + (col % 2) * (v_step / 2) + v_step / 2
-        pos.append((cx, cy))
-    return pos, r
+    axial = [(0, 0)]
+    ring  = 1
+    while len(axial) < n:
+        q, s = -ring, ring          # start of ring k: direction 4 * k from origin
+        for d in range(6):
+            dq, ds = _SPIRAL_DIRS[d]
+            for _ in range(ring):
+                if len(axial) >= n:
+                    break
+                axial.append((q, s))
+                q += dq
+                s += ds
+        ring += 1
 
+    def to_world(q, s):
+        return 1.5 * r * q, math.sqrt(3) * r * (s + q / 2)
 
-def content_height(n, vw, vh):
-    r      = radius(vh)
-    h_step = 1.5 * r
-    v_step = math.sqrt(3) * r
-    cols   = max(1, int(vw / h_step) + 1)
-    nrows  = math.ceil(n / cols) if n > 0 else 1
-    return max(int(nrows * v_step + v_step / 2), vh)
+    return [to_world(q, s) for q, s in axial[:n]], r
 
 
 def hex_path(cr, cx, cy, r):

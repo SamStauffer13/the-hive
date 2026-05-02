@@ -9,8 +9,8 @@ gi.require_version('Gdk', '4.0')
 from gi.repository import Gtk, Gdk, GdkPixbuf, GLib
 
 from .hex_geometry import (
-    radius, ncols, positions,
-    hex_path, wide_hex_path, clamp_nav, truncate_text,
+    radius, positions,
+    hex_path, wide_hex_path, truncate_text,
     BEVEL,
 )
 from . import scale_pixbuf_for_hex
@@ -571,12 +571,7 @@ class HiveGrid(Gtk.DrawingArea):
         n = len(self.visible)
         if not n:
             return
-        if self.query:
-            new = self._navigate_spatial(direction)
-        else:
-            vw, vh = self._viewport_size()
-            cols = ncols(vw, radius(vh))
-            new  = clamp_nav(direction, self.selected, n, cols)
+        new = self._navigate_spatial(direction)
         if new != self.selected:
             self.selected = new
             if not self.query:
