@@ -106,7 +106,7 @@ class TheHive(Gtk.ApplicationWindow):
                 for k, _ in LOADERS:
                     if k in results:
                         ordered.extend(results[k])
-                GLib.idle_add(self._on_data_loaded, ordered)
+                GLib.idle_add(self._on_data_loaded, ordered, priority=GLib.PRIORITY_HIGH_IDLE)
 
         # Post-load side effects — same as before, just use results dict
         yt    = results.get('yt', [])
