@@ -123,7 +123,7 @@ class HiveGrid(Gtk.DrawingArea):
     def _get_positions(self):
         vw, vh = self._viewport_size()
         n = len(self.all_items) if self.query else len(self.visible)
-        key = (n, vw, vh)
+        key = (n, vh)                   # vw unused by spiral positions()
         if self._pos_cache is not None and self._pos_cache_key == key:
             return self._pos_cache, radius(vh)
         pos, r = positions(n, vw, vh)
@@ -158,6 +158,35 @@ class HiveGrid(Gtk.DrawingArea):
             self._pan_y = vh / 2 - cy
         else:
             self._pan_x = self._pan_y = 0.0
+
+    def _draw_selected_overlay(self, cr, cx, cy, cell_r, item):
+        cr.save()
+        hex_path(cr, cx, cy, cell_r)
+        cr.clip()
+        cr.set_source_rgba(0, 0, 0, 0.68)
+        cr.rectangle(cx - cell_r, cy + cell_r * 0.30, 2 * cell_r, cell_r * 0.80)
+        cr.fill()
+        cr.restore()
+
+        cr.select_font_face('Nova Mono', 0, 0)
+        cr.set_font_size(13)
+        cr.set_source_rgba(1.0, 1.0, 1.0, 1.0)
+        name = truncate_text(cr, item['name'], cell_r * 1.6)
+        te   = cr.text_extents(name)
+        cr.move_to(cx - te.width / 2 - te.x_bearing, cy + cell_r * 0.55)
+        cr.show_text(name)
+
+        cr.set_font_size(9)
+        cr.set_source_rgba(1.0, 1.0, 1.0, 0.70)
+        badge = item['type'].upper()
+        te2   = cr.text_extents(badge)
+        cr.move_to(cx - te2.width / 2 - te2.x_bearing, cy + cell_r * 0.72)
+        cr.show_text(badge)
+
+        cr.set_line_width(2.0)
+        cr.set_source_rgba(1.0, 1.0, 1.0, 0.50)
+        hex_path(cr, cx, cy, cell_r)
+        cr.stroke()
 
     # ── Drawing ────────────────────────────────────────────────────────
 
@@ -228,6 +257,8 @@ class HiveGrid(Gtk.DrawingArea):
             cx, cy   = pos[slot]
             if cy + self._pan_y + r < 0 or cy + self._pan_y - r > vh:
                 continue
+            if cx + self._pan_x + r < 0 or cx + self._pan_x - r > vw:
+                continue
             item     = self.all_items[item_idx]
             selected  = (slot == self.selected)
             petal_ring = petal_slots.get(slot)   # None if not a petal
@@ -273,37 +304,10 @@ class HiveGrid(Gtk.DrawingArea):
                     cr.paint()
             cr.restore()
 
-        # ── Selected cell overlay (scrim + text + border) ─────────────
         try:
             if 0 <= self.selected < len(pos):
                 item = self.all_items[self.visible[self.selected]]
-                cr.save()
-                hex_path(cr, sel_cx, sel_cy, cell_r)
-                cr.clip()
-                cr.set_source_rgba(0, 0, 0, 0.68)
-                cr.rectangle(sel_cx - cell_r, sel_cy + cell_r * 0.30, 2 * cell_r, cell_r * 0.80)
-                cr.fill()
-                cr.restore()
-
-                cr.select_font_face('Nova Mono', 0, 0)
-                cr.set_font_size(13)
-                cr.set_source_rgba(1.0, 1.0, 1.0, 1.0)
-                name = truncate_text(cr, item['name'], cell_r * 1.6)
-                te   = cr.text_extents(name)
-                cr.move_to(sel_cx - te.width / 2 - te.x_bearing, sel_cy + cell_r * 0.55)
-                cr.show_text(name)
-
-                cr.set_font_size(9)
-                cr.set_source_rgba(1.0, 1.0, 1.0, 0.70)
-                badge = item['type'].upper()
-                te2   = cr.text_extents(badge)
-                cr.move_to(sel_cx - te2.width / 2 - te2.x_bearing, sel_cy + cell_r * 0.72)
-                cr.show_text(badge)
-
-                cr.set_line_width(2.0)
-                cr.set_source_rgba(1.0, 1.0, 1.0, 0.50)
-                hex_path(cr, sel_cx, sel_cy, cell_r)
-                cr.stroke()
+                self._draw_selected_overlay(cr, sel_cx, sel_cy, cell_r, item)
         except Exception as e:
             print(f'[hive] overlay draw error: {e}')
 
@@ -336,6 +340,8 @@ class HiveGrid(Gtk.DrawingArea):
             cx, cy = pos[i]
             if cy + self._pan_y + r < 0 or cy + self._pan_y - r > vh:
                 continue
+            if cx + self._pan_x + r < 0 or cx + self._pan_x - r > vw:
+                continue
 
             matched  = i in self._matched
             selected = (i == sel_item_idx)
@@ -356,45 +362,17 @@ class HiveGrid(Gtk.DrawingArea):
             cr.paint()
             cr.restore()
 
-        # ── Selected overlay (scrim + name + border) ───────────────────
         if has_selected:
             item = self.all_items[sel_item_idx]
-            cr.save()
-            hex_path(cr, sel_cx, sel_cy, cell_r)
-            cr.clip()
-            cr.set_source_rgba(0, 0, 0, 0.68)
-            cr.rectangle(sel_cx - cell_r, sel_cy + cell_r * 0.30, 2 * cell_r, cell_r * 0.80)
-            cr.fill()
-            cr.restore()
-
-            cr.select_font_face('Nova Mono', 0, 0)
-            cr.set_font_size(13)
-            cr.set_source_rgba(1.0, 1.0, 1.0, 1.0)
-            name = truncate_text(cr, item['name'], cell_r * 1.6)
-            te   = cr.text_extents(name)
-            cr.move_to(sel_cx - te.width / 2 - te.x_bearing, sel_cy + cell_r * 0.55)
-            cr.show_text(name)
-
-            cr.set_font_size(9)
-            cr.set_source_rgba(1.0, 1.0, 1.0, 0.70)
-            badge = item['type'].upper()
-            te2   = cr.text_extents(badge)
-            cr.move_to(sel_cx - te2.width / 2 - te2.x_bearing, sel_cy + cell_r * 0.72)
-            cr.show_text(badge)
-
-            cr.set_line_width(2.0)
-            cr.set_source_rgba(1.0, 1.0, 1.0, 0.50)
-            hex_path(cr, sel_cx, sel_cy, cell_r)
-            cr.stroke()
+            self._draw_selected_overlay(cr, sel_cx, sel_cy, cell_r, item)
 
         cr.restore()  # end pan transform
 
     def _draw_grid_dim(self, cr, vw, vh):
         """Draw all library cells dimmed as a background for the search overlay."""
-        n = len(self.all_items)
-        if not n:
+        if not self.all_items:
             return
-        pos, r = positions(n, vw, vh)
+        pos, r = self._get_positions()
         cell_r = r - BEVEL
 
         cr.save()
@@ -405,6 +383,8 @@ class HiveGrid(Gtk.DrawingArea):
                 break
             cx, cy = pos[slot]
             if cy + self._pan_y + r < 0 or cy + self._pan_y - r > vh:
+                continue
+            if cx + self._pan_x + r < 0 or cx + self._pan_x - r > vw:
                 continue
             cr.save()
             hex_path(cr, cx, cy, cell_r)

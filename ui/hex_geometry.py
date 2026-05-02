@@ -41,10 +41,12 @@ def positions(n, vw, vh):
                 s += ds
         ring += 1
 
-    def to_world(q, s):
-        return 1.5 * r * q, math.sqrt(3) * r * (s + q / 2)
+    return [axial_to_world(q, s, r) for q, s in axial[:n]], r
 
-    return [to_world(q, s) for q, s in axial[:n]], r
+
+def axial_to_world(q, s, r):
+    """Convert flat-top axial hex coordinates to world (x, y) for a given cell radius."""
+    return 1.5 * r * q, math.sqrt(3) * r * (s + q / 2)
 
 
 def hex_path(cr, cx, cy, r):
