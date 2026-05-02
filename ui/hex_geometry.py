@@ -14,11 +14,11 @@ _SPIRAL_DIRS = [(0, -1), (1, -1), (1, 0), (0, 1), (-1, 1), (-1, 0)]
 
 
 def radius(vh):
-    return max(40, vh / (math.sqrt(3) * (ROWS + 0.5)))
+    return max(40, vh / (1.5 * (ROWS + 0.5)))
 
 
 def ncols(vw, r):
-    return max(1, int(vw / (1.5 * r)) + 1)
+    return max(1, int(vw / (math.sqrt(3) * r)) + 1)
 
 
 def positions(n, vw, vh):
@@ -45,13 +45,13 @@ def positions(n, vw, vh):
 
 
 def axial_to_world(q, s, r):
-    """Convert flat-top axial hex coordinates to world (x, y) for a given cell radius."""
-    return 1.5 * r * q, math.sqrt(3) * r * (s + q / 2)
+    """Convert pointy-top axial hex coordinates to world (x, y) for a given cell radius."""
+    return math.sqrt(3) * r * (q + s / 2), 1.5 * r * s
 
 
 def hex_path(cr, cx, cy, r):
     if r not in _HEX_OFFSETS:
-        _HEX_OFFSETS[r] = [(r * math.cos(math.pi / 3 * i), r * math.sin(math.pi / 3 * i)) for i in range(6)]
+        _HEX_OFFSETS[r] = [(r * math.cos(math.pi / 3 * i + math.pi / 6), r * math.sin(math.pi / 3 * i + math.pi / 6)) for i in range(6)]
     pts = _HEX_OFFSETS[r]
     cr.move_to(cx + pts[0][0], cy + pts[0][1])
     for dx, dy in pts[1:]:
@@ -78,8 +78,8 @@ def sr_dynamic_geo(n, vw, vh):
     best_cols, best_R = 3, 0
     for cols in range(3, 10):
         rows = math.ceil(n / cols)
-        r_h  = avail_h / (math.sqrt(3) * (rows + 0.5))
-        r_w  = vw      / (1.5 * cols + 0.5)
+        r_h  = avail_h / (1.5 * (rows + 0.5))
+        r_w  = vw      / (math.sqrt(3) * cols + 0.5)
         r    = min(r_h, r_w)
         if r > best_R:
             best_R, best_cols = r, cols
@@ -89,8 +89,8 @@ def sr_dynamic_geo(n, vw, vh):
 def sr_item_positions(n, vw, vh, scroll_y):
     """Return (list of (cx, cy), R) for n search result tiles."""
     R, ncols_, top_off = sr_dynamic_geo(n, vw, vh)
-    h_step = 1.5 * R
-    v_step = math.sqrt(3) * R
+    h_step = math.sqrt(3) * R
+    v_step = 1.5 * R
     first_row      = min(n, ncols_)
     grid_w         = (first_row - 1) * h_step + 2 * R
     x_off          = (vw - grid_w) / 2
@@ -103,8 +103,8 @@ def sr_item_positions(n, vw, vh, scroll_y):
     for i in range(n):
         col = i % ncols_
         row = i // ncols_
-        cx  = x_off + col * h_step + R
-        cy  = scroll_y + y_off + row * v_step + (col % 2) * (v_step / 2) + v_step / 2
+        cx  = x_off + col * h_step + R + (row % 2) * (h_step / 2)
+        cy  = scroll_y + y_off + row * v_step + v_step / 2
         pos.append((cx, cy))
     return pos, R
 
