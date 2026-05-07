@@ -22,6 +22,7 @@ from constants import (
     ITEM_ALPHA_UNSELECTED, ALPHA_DOWNLOADING_BASE,
 )
 
+
 # Axial navigation deltas (pointy-top hex)
 _AX_DIRS = {
     'right': ( 1,  0),
@@ -54,6 +55,9 @@ class HiveGrid(Gtk.DrawingArea):
 
         self._matched     = set()
         self._petal_rings = 0
+
+        # Gravity search — matched cells snap to center spiral
+        self._gravity_pos = {}   # item_idx → (world_x, world_y)
 
         self.search  = SearchOverlay(self.queue_draw)
         self.preview = PreviewManager(self.queue_draw)
@@ -295,8 +299,15 @@ class HiveGrid(Gtk.DrawingArea):
 
                 cr.restore()
 
+                # Black border around flower cells — visible at outer edge
+                if selected or is_petal:
+                    hex_path(cr, cx, cy, cell_r)
+                    cr.set_source_rgba(0, 0, 0, 1)
+                    cr.set_line_width(4)
+                    cr.stroke()
+
     def _draw_filter_mode(self, cr, vw, vh):
-        """Finite spiral — filter mode. Matched cells bright, unmatched dim."""
+        """Gravity filter mode — matched cells animate toward center spiral, unmatched dim."""
         pos, r = self._get_positions()
         cell_r = r - BEVEL
 
@@ -305,26 +316,30 @@ class HiveGrid(Gtk.DrawingArea):
             if self.visible and 0 <= self.selected < len(self.visible)
             else -1
         )
-        sel_cx = sel_cy = 0.0
-        has_sel = 0 <= sel_item_idx < len(pos)
-        if has_sel:
-            sel_cx, sel_cy = pos[sel_item_idx]
 
+        # World origin at screen center — matched cells are in this coord space
         cr.save()
-        cr.translate(self._pan_x, self._pan_y)
+        cr.translate(vw / 2, vh / 2)
 
         for i, item in enumerate(self.all_items):
             if i >= len(pos):
                 break
-            cx, cy = pos[i]
-            if cy + self._pan_y + r < 0 or cy + self._pan_y - r > vh:
-                continue
-            if cx + self._pan_x + r < 0 or cx + self._pan_x - r > vw:
-                continue
 
             matched  = i in self._matched
             selected = (i == sel_item_idx)
-            alpha    = 0.30 if selected else (0.88 if matched else 0.08)
+
+            # Matched cells use animated gravity position; unmatched stay in place
+            if matched:
+                cx, cy = self._gravity_pos.get(i, pos[i])
+            else:
+                cx, cy = pos[i]
+
+            # Cull (world coords; screen = world + (vw/2, vh/2))
+            scx, scy = cx + vw / 2, cy + vh / 2
+            if scy + r < 0 or scy - r > vh or scx + r < 0 or scx - r > vw:
+                continue
+
+            alpha = 0.30 if selected else (0.88 if matched else 0.08)
 
             cr.save()
             hex_path(cr, cx, cy, cell_r)
@@ -336,12 +351,17 @@ class HiveGrid(Gtk.DrawingArea):
                 spb = self._get_scaled(item, cell_r)
                 if spb:
                     Gdk.cairo_set_source_pixbuf(cr, spb,
-                        cx - spb.get_width() / 2, cy - spb.get_height() / 2)
+                        cx - spb.get_width()  / 2,
+                        cy - spb.get_height() / 2)
                     cr.paint_with_alpha(alpha)
             cr.restore()
 
-        if has_sel:
-            self._draw_center_search(cr, sel_cx, sel_cy, cell_r)
+        if 0 <= sel_item_idx:
+            scx, scy = self._gravity_pos.get(
+                sel_item_idx,
+                pos[sel_item_idx] if sel_item_idx < len(pos) else (0.0, 0.0),
+            )
+            self._draw_center_search(cr, scx, scy, cell_r)
 
         cr.restore()
 
@@ -406,12 +426,12 @@ class HiveGrid(Gtk.DrawingArea):
 
         if self.query:
             pos_list, _ = self._get_positions()
-            gx, gy      = x - self._pan_x, y - self._pan_y
-            for i, (cx, cy) in enumerate(pos_list):
-                if math.hypot(gx - cx, gy - cy) > r:
+            # Click coords relative to world origin (screen center)
+            wx, wy = x - vw / 2, y - vh / 2
+            for i in self._matched:
+                cx, cy = self._gravity_pos.get(i, pos_list[i] if i < len(pos_list) else (0, 0))
+                if math.hypot(wx - cx, wy - cy) > r:
                     continue
-                if i not in self._matched:
-                    return
                 try:
                     vis_idx = self.visible.index(i)
                 except ValueError:
@@ -440,16 +460,24 @@ class HiveGrid(Gtk.DrawingArea):
     def _navigate_spatial(self, direction):
         """Filter mode: find nearest matched cell in the given direction."""
         pos_list, _ = self._get_positions()
+
+        def cell_pos(idx):
+            if idx in self._gravity_pos:
+                return self._gravity_pos[idx]
+            if idx < len(pos_list):
+                return pos_list[idx]
+            return (0.0, 0.0)
+
         cur_idx = self.visible[self.selected] if 0 <= self.selected < len(self.visible) else -1
-        if cur_idx < 0 or cur_idx >= len(pos_list):
+        if cur_idx < 0:
             return self.selected
-        cur_cx, cur_cy = pos_list[cur_idx]
+        cur_cx, cur_cy = cell_pos(cur_idx)
 
         best, best_score = -1, float('inf')
         for vi, item_idx in enumerate(self.visible):
-            if item_idx >= len(pos_list) or vi == self.selected:
+            if vi == self.selected:
                 continue
-            cx, cy = pos_list[item_idx]
+            cx, cy = cell_pos(item_idx)
             dx, dy = cx - cur_cx, cy - cur_cy
             if direction == 'left'  and dx >= 0: continue
             if direction == 'right' and dx <= 0: continue
@@ -535,9 +563,12 @@ class HiveGrid(Gtk.DrawingArea):
     def filter(self, query):
         was_filtering = bool(self.query)
         self.query    = query
+        vw, vh        = self._viewport_size()
+
         if not query:
-            self.visible  = list(range(len(self.all_items)))
-            self._matched = set()
+            self.visible         = list(range(len(self.all_items)))
+            self._matched     = set()
+            self._gravity_pos = {}
         else:
             q       = query.lower()
             matched = []
@@ -553,6 +584,14 @@ class HiveGrid(Gtk.DrawingArea):
                     matched.append(i)
             self._matched = set(matched)
             self.visible  = matched
+
+            # Gravity: pack matched items into a fresh spiral at world origin
+            if matched:
+                tgt_pos, _ = positions(len(matched), vw, vh)
+                self._gravity_pos = {item_idx: tgt_pos[rank] for rank, item_idx in enumerate(matched)}
+            else:
+                self._gravity_pos = {}
+
         self.selected = 0
         if was_filtering != bool(query):
             self._invalidate_layout()

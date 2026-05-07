@@ -485,13 +485,13 @@ class TheHive(Gtk.ApplicationWindow):
             Gdk.KEY_Right: lambda: self.grid.search.navigate('right', *self.grid._viewport_size()) if in_search else self.grid.navigate('right'),
         }
 
-        if keyval == Gdk.KEY_bracketright and not self.grid.query:
-            self.grid.adjust_petal_rings(1)
-            return True
-
-        if keyval == Gdk.KEY_bracketleft and not self.grid.query:
-            self.grid.adjust_petal_rings(-1)
-            return True
+        if (state & Gdk.ModifierType.CONTROL_MASK) and not self.grid.query:
+            if keyval == Gdk.KEY_Up:
+                self.grid.adjust_petal_rings(1)
+                return True
+            if keyval == Gdk.KEY_Down:
+                self.grid.adjust_petal_rings(-1)
+                return True
 
         if keyval == Gdk.KEY_BackSpace and (state & Gdk.ModifierType.SUPER_MASK):
             item, slot = self.grid.get_selected()
