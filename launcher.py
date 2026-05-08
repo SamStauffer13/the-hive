@@ -1,6 +1,7 @@
 import random
 import re
 import shutil
+import signal
 import subprocess
 import threading
 import urllib.parse
@@ -16,7 +17,7 @@ from constants import (
     CACHE_DIR, WORKSHOP_DIR, UNSUBSCRIBE_QUEUE_FILE,
     T_GAME, T_MOVIE, T_SHOW, T_WALLPAPER, T_YOUTUBE, T_BOOK,
     S_INSTALLED, S_DOWNLOADING, S_NOT_INSTALLED,
-    SEARCH_DEBOUNCE_MS,
+    SEARCH_DEBOUNCE_MS, toggle_theme, reload_theme,
 )
 from config import jellyfin_cfg, qbit_cfg
 from cache import download_image, load_queue, save_queue
@@ -55,7 +56,7 @@ class TheHive(Gtk.ApplicationWindow):
         super().__init__(application=app, title="The Hive")
         self.set_default_size(1280, 800)
         self.set_decorated(False)
-        self.fullscreen()
+        self.set_cursor(Gdk.Cursor.new_from_name("none", None))
         _spawn(flush_unsubscribe_queue)
 
         css = Gtk.CssProvider()
@@ -82,8 +83,15 @@ class TheHive(Gtk.ApplicationWindow):
         key.connect('key-pressed', self._on_key_pressed)
         self.add_controller(key)
 
+        GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signal.SIGUSR1, self._on_sigusr1)
+
         _spawn(self._load_all_async)
         GLib.timeout_add_seconds(5, self._poll_game_states)
+
+    def _on_sigusr1(self):
+        reload_theme()
+        self.grid.queue_draw()
+        return True
 
     # ── Data loading ───────────────────────────────────────────────────
 
@@ -491,6 +499,10 @@ class TheHive(Gtk.ApplicationWindow):
                 return True
             if keyval == Gdk.KEY_Down:
                 self.grid.adjust_petal_rings(-1)
+                return True
+            if keyval == Gdk.KEY_t:
+                toggle_theme()
+                self.grid.queue_draw()
                 return True
 
         if keyval == Gdk.KEY_BackSpace and (state & Gdk.ModifierType.SUPER_MASK):

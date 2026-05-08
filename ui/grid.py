@@ -18,9 +18,19 @@ from . import scale_pixbuf_for_hex
 from .preview import PreviewManager
 from .search_overlay import SearchOverlay
 from constants import (
-    C_BG_DARK, C_PINK, S_INSTALLED, S_DOWNLOADING, S_NOT_INSTALLED, VIDEO_TYPES,
+    THEME, S_INSTALLED, S_DOWNLOADING, S_NOT_INSTALLED, VIDEO_TYPES,
     ITEM_ALPHA_UNSELECTED, ALPHA_DOWNLOADING_BASE,
 )
+
+
+def _desat(cr):
+    """Desaturate the current clip region to grayscale (mono theme only)."""
+    if not THEME.get('desaturate'):
+        return
+    cr.set_operator(cairo.OPERATOR_HSL_SATURATION)
+    cr.set_source_rgb(0.5, 0.5, 0.5)
+    cr.paint()
+    cr.set_operator(cairo.OPERATOR_OVER)
 
 
 # Axial navigation deltas (pointy-top hex)
@@ -201,7 +211,7 @@ class HiveGrid(Gtk.DrawingArea):
         cr.paint()
         cr.restore()
 
-        cr.set_source_rgba(0, 0, 0, 0.20)
+        cr.set_source_rgba(*THEME['bg_wash'])
         cr.paint()
 
         vw, vh = width, height
@@ -275,7 +285,7 @@ class HiveGrid(Gtk.DrawingArea):
                 cr.clip()
 
                 if (selected or is_petal) and flower_pb:
-                    cr.set_source_rgba(*C_BG_DARK)
+                    cr.set_source_rgba(*THEME['bg'])
                     cr.paint()
                     # Flower centered at screen center (selected cell position)
                     ox = vw / 2 - flower_pb.get_width()  / 2
@@ -287,8 +297,9 @@ class HiveGrid(Gtk.DrawingArea):
                         cr.paint_with_alpha(alpha * fade_alpha)
                     else:
                         cr.paint_with_alpha(alpha)
+                    # flower stays full color — no desat
                 else:
-                    cr.set_source_rgba(*C_BG_DARK)
+                    cr.set_source_rgba(*THEME['bg'])
                     cr.paint()
                     draw_pb = self._get_scaled(item, cell_r)
                     if draw_pb:
@@ -296,13 +307,14 @@ class HiveGrid(Gtk.DrawingArea):
                             cx - draw_pb.get_width()  / 2,
                             cy - draw_pb.get_height() / 2)
                         cr.paint_with_alpha(alpha)
+                        _desat(cr)
 
                 cr.restore()
 
                 # Black border around flower cells — visible at outer edge
                 if selected or is_petal:
                     hex_path(cr, cx, cy, cell_r)
-                    cr.set_source_rgba(0, 0, 0, 1)
+                    cr.set_source_rgba(*THEME['cell_border'])
                     cr.set_line_width(4)
                     cr.stroke()
 
@@ -347,7 +359,7 @@ class HiveGrid(Gtk.DrawingArea):
             cr.save()
             hex_path(cr, cx, cy, cell_r)
             cr.clip()
-            cr.set_source_rgba(*C_BG_DARK)
+            cr.set_source_rgba(*THEME['bg'])
             cr.paint()
             pb = self._pb_cache.get(id(item))
             if pb:
@@ -357,6 +369,7 @@ class HiveGrid(Gtk.DrawingArea):
                         cx - spb.get_width()  / 2,
                         cy - spb.get_height() / 2)
                     cr.paint_with_alpha(0.08)
+                    _desat(cr)
             cr.restore()
 
         # Pass 2: matched cells on top
@@ -373,7 +386,7 @@ class HiveGrid(Gtk.DrawingArea):
             cr.save()
             hex_path(cr, cx, cy, cell_r)
             cr.clip()
-            cr.set_source_rgba(*C_BG_DARK)
+            cr.set_source_rgba(*THEME['bg'])
             cr.paint()
             if in_flower and flower_pb:
                 # Flower image centered at world origin — same as browse mode
@@ -381,6 +394,7 @@ class HiveGrid(Gtk.DrawingArea):
                     -flower_pb.get_width()  / 2,
                     -flower_pb.get_height() / 2)
                 cr.paint_with_alpha(alpha)
+                # flower stays full color — no desat
             else:
                 pb = self._pb_cache.get(id(item))
                 if pb:
@@ -390,6 +404,7 @@ class HiveGrid(Gtk.DrawingArea):
                             cx - spb.get_width()  / 2,
                             cy - spb.get_height() / 2)
                         cr.paint_with_alpha(alpha)
+                        _desat(cr)
             cr.restore()
 
         # Text floats above the flower — top of cluster ≈ -(1.5*r*rings + cell_r)
@@ -408,13 +423,13 @@ class HiveGrid(Gtk.DrawingArea):
         # Baseline sits 16px above the flower top — text ascenders go further up
         ty = flower_top_y - 16
         tx = -te.width / 2 - te.x_bearing
-        cr.set_source_rgba(1.0, 1.0, 1.0, 1.0)
+        cr.set_source_rgba(*THEME['text'])
         cr.move_to(tx, ty)
         cr.show_text(text)
 
         if int(time.time() * 2) % 2 == 0:
             cur_x = tx + te.x_advance + 3
-            cr.set_source_rgba(*C_PINK)
+            cr.set_source_rgba(*THEME['accent'])
             cr.set_line_width(2)
             cr.move_to(cur_x, ty + te.y_bearing - 2)
             cr.line_to(cur_x, ty + te.y_bearing + te.height + 2)

@@ -1,3 +1,4 @@
+import cairo
 import math
 import time
 import gi
@@ -7,7 +8,7 @@ from .hex_geometry import (
     hex_path, sr_dynamic_geo, sr_item_positions, clamp_nav, truncate_text, BEVEL
 )
 from . import scale_pixbuf_for_hex
-from constants import seeder_color
+from constants import THEME, seeder_color
 
 
 class SearchOverlay:
@@ -101,9 +102,10 @@ class SearchOverlay:
 
     def _draw_loading(self, cr, vw, vh):
         pulse = 0.6 + 0.4 * (math.sin(time.time() * 2.5) + 1) / 2
+        r, g, b, _ = THEME['text']
         cr.select_font_face('CYBERHYPE', 0, 0)
         cr.set_font_size(28)
-        cr.set_source_rgba(1.0, 1.0, 1.0, pulse)
+        cr.set_source_rgba(r, g, b, pulse)
         te = cr.text_extents('SEARCHING')
         cr.move_to((vw - te.width) / 2 - te.x_bearing, vh / 2 - te.height / 2 - te.y_bearing)
         cr.show_text('SEARCHING')
@@ -116,7 +118,7 @@ class SearchOverlay:
     def _draw_empty(self, cr, vw, vh):
         cr.select_font_face('Nova Mono', 0, 0)
         cr.set_font_size(18)
-        cr.set_source_rgba(1.0, 1.0, 1.0, 1.0)
+        cr.set_source_rgba(*THEME['text'])
         te = cr.text_extents('No results found.')
         cr.move_to((vw - te.width) / 2 - te.x_bearing, vh / 2)
         cr.show_text('No results found.')
@@ -132,7 +134,7 @@ class SearchOverlay:
 
             sel = (i == self.selected)
 
-            cr.set_source_rgba(*((0.18, 0.08, 0.35, 0.95) if sel else (0.07, 0.05, 0.11, 0.95)))
+            cr.set_source_rgba(*(THEME['tile_sel_bg'] if sel else THEME['tile_bg']))
             hex_path(cr, cx, cy, draw_r)
             cr.fill()
 
@@ -148,18 +150,23 @@ class SearchOverlay:
                     self._scaled_cache[cache_key] = spb
                 Gdk.cairo_set_source_pixbuf(cr, spb, cx - spb.get_width() / 2, cy - spb.get_height() / 2)
                 cr.paint_with_alpha(0.85 if sel else 0.65)
+                if THEME.get('desaturate'):
+                    cr.set_operator(cairo.OPERATOR_HSL_SATURATION)
+                    cr.set_source_rgb(0.5, 0.5, 0.5)
+                    cr.paint()
+                    cr.set_operator(cairo.OPERATOR_OVER)
                 cr.restore()
 
             cr.save()
             hex_path(cr, cx, cy, draw_r)
             cr.clip()
-            cr.set_source_rgba(0.0, 0.0, 0.0, 0.70)
+            cr.set_source_rgba(*THEME['text_shade'])
             cr.rectangle(cx - R, cy + R * 0.10, 2 * R, R)
             cr.fill()
             cr.restore()
 
             cr.set_line_width(2.0 if sel else 1.0)
-            cr.set_source_rgba(*((1.0, 1.0, 1.0, 0.60) if sel else (1.0, 1.0, 1.0, 0.20)))
+            cr.set_source_rgba(*(THEME['tile_sel_border'] if sel else THEME['tile_border']))
             hex_path(cr, cx, cy, draw_r)
             cr.stroke()
 
@@ -167,7 +174,7 @@ class SearchOverlay:
 
             if item.get('source'):
                 cr.set_font_size(11)
-                cr.set_source_rgba(1.0, 1.0, 1.0, 0.55)
+                cr.set_source_rgba(*THEME['text_dim'])
                 te = cr.text_extents(item['source'])
                 cr.move_to(cx - te.width / 2 - te.x_bearing, cy - R * 0.48)
                 cr.show_text(item['source'])
@@ -176,7 +183,7 @@ class SearchOverlay:
             name  = item['name']
             label = f"{name} ({year})" if year else name
             cr.set_font_size(14)
-            cr.set_source_rgba(1.0, 1.0, 1.0, 1.0)
+            cr.set_source_rgba(*(THEME['tile_sel_text'] if sel else THEME['tile_text']))
             label = truncate_text(cr, label, draw_r * 1.55)
             te    = cr.text_extents(label)
             cr.move_to(cx - te.width / 2 - te.x_bearing, cy + R * 0.42)
