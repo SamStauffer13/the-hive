@@ -307,40 +307,43 @@ class HiveGrid(Gtk.DrawingArea):
                     cr.stroke()
 
     def _draw_filter_mode(self, cr, vw, vh):
-        """Gravity filter mode — matched cells animate toward center spiral, unmatched dim."""
+        """Gravity filter mode — flower grows with query length, text floats above."""
         pos, r = self._get_positions()
         cell_r = r - BEVEL
+        sqrt3  = math.sqrt(3)
 
+        # Flower expands with query length: 1-3→0 rings, 4-6→1, 7-9→2, 10+→3
+        effective_rings = min(3, (len(self.query) - 1) // 3)
+        flower_count    = min(
+            1 + 3 * effective_rings * (effective_rings + 1),
+            len(self.visible),
+        )
+        rank_of = {item_idx: rank for rank, item_idx in enumerate(self.visible)}
+
+        # Flower image: selected match's artwork spans the whole petal cluster
         sel_item_idx = (
             self.visible[self.selected]
             if self.visible and 0 <= self.selected < len(self.visible)
             else -1
         )
+        super_r   = sqrt3 * r * effective_rings + cell_r
+        flower_pb = None
+        if 0 <= sel_item_idx < len(self.all_items):
+            raw = self._pb_cache.get(id(self.all_items[sel_item_idx]))
+            if raw:
+                flower_pb = self._get_flower_pb(raw, super_r)
 
-        # World origin at screen center — matched cells are in this coord space
         cr.save()
         cr.translate(vw / 2, vh / 2)
 
+        # Pass 1: unmatched background
         for i, item in enumerate(self.all_items):
-            if i >= len(pos):
-                break
-
-            matched  = i in self._matched
-            selected = (i == sel_item_idx)
-
-            # Matched cells use animated gravity position; unmatched stay in place
-            if matched:
-                cx, cy = self._gravity_pos.get(i, pos[i])
-            else:
-                cx, cy = pos[i]
-
-            # Cull (world coords; screen = world + (vw/2, vh/2))
+            if i >= len(pos) or i in self._matched:
+                continue
+            cx, cy   = pos[i]
             scx, scy = cx + vw / 2, cy + vh / 2
             if scy + r < 0 or scy - r > vh or scx + r < 0 or scx - r > vw:
                 continue
-
-            alpha = 0.30 if selected else (0.88 if matched else 0.08)
-
             cr.save()
             hex_path(cr, cx, cy, cell_r)
             cr.clip()
@@ -353,27 +356,58 @@ class HiveGrid(Gtk.DrawingArea):
                     Gdk.cairo_set_source_pixbuf(cr, spb,
                         cx - spb.get_width()  / 2,
                         cy - spb.get_height() / 2)
-                    cr.paint_with_alpha(alpha)
+                    cr.paint_with_alpha(0.08)
             cr.restore()
 
-        if 0 <= sel_item_idx:
-            scx, scy = self._gravity_pos.get(
-                sel_item_idx,
-                pos[sel_item_idx] if sel_item_idx < len(pos) else (0.0, 0.0),
-            )
-            self._draw_center_search(cr, scx, scy, cell_r)
+        # Pass 2: matched cells on top
+        for i, item in enumerate(self.all_items):
+            if i >= len(pos) or i not in self._matched:
+                continue
+            rank      = rank_of.get(i, -1)
+            in_flower = 0 <= rank < flower_count
+            cx, cy    = self._gravity_pos.get(i, pos[i])
+            alpha     = 1.0 if in_flower else 0.55
+            scx, scy  = cx + vw / 2, cy + vh / 2
+            if scy + r < 0 or scy - r > vh or scx + r < 0 or scx - r > vw:
+                continue
+            cr.save()
+            hex_path(cr, cx, cy, cell_r)
+            cr.clip()
+            cr.set_source_rgba(*C_BG_DARK)
+            cr.paint()
+            if in_flower and flower_pb:
+                # Flower image centered at world origin — same as browse mode
+                Gdk.cairo_set_source_pixbuf(cr, flower_pb,
+                    -flower_pb.get_width()  / 2,
+                    -flower_pb.get_height() / 2)
+                cr.paint_with_alpha(alpha)
+            else:
+                pb = self._pb_cache.get(id(item))
+                if pb:
+                    spb = self._get_scaled(item, cell_r)
+                    if spb:
+                        Gdk.cairo_set_source_pixbuf(cr, spb,
+                            cx - spb.get_width()  / 2,
+                            cy - spb.get_height() / 2)
+                        cr.paint_with_alpha(alpha)
+            cr.restore()
+
+        # Text floats above the flower — top of cluster ≈ -(1.5*r*rings + cell_r)
+        flower_top = -(1.5 * r * effective_rings + cell_r)
+        self._draw_floating_search(cr, flower_top, effective_rings)
 
         cr.restore()
 
-    def _draw_center_search(self, cr, cx, cy, cell_r):
-        """Query text + blinking cursor inside the center cell."""
-        font_size = max(16, cell_r * 0.32)
+    def _draw_floating_search(self, cr, flower_top_y, rings):
+        """Query text + cursor floating above the flower cluster."""
+        font_size = max(22, 20 + rings * 12)
         cr.select_font_face('CYBERHYPE', 0, 0)
         cr.set_font_size(font_size)
-        text = truncate_text(cr, self.query, cell_r * 1.55)
+        text = self.query
         te   = cr.text_extents(text)
-        tx   = cx - te.width / 2 - te.x_bearing
-        ty   = cy - te.height / 2 - te.y_bearing
+        # Baseline sits 16px above the flower top — text ascenders go further up
+        ty = flower_top_y - 16
+        tx = -te.width / 2 - te.x_bearing
         cr.set_source_rgba(1.0, 1.0, 1.0, 1.0)
         cr.move_to(tx, ty)
         cr.show_text(text)
@@ -382,8 +416,8 @@ class HiveGrid(Gtk.DrawingArea):
             cur_x = tx + te.x_advance + 3
             cr.set_source_rgba(*C_PINK)
             cr.set_line_width(2)
-            cr.move_to(cur_x, ty - 2)
-            cr.line_to(cur_x, ty + te.height + 2)
+            cr.move_to(cur_x, ty + te.y_bearing - 2)
+            cr.line_to(cur_x, ty + te.y_bearing + te.height + 2)
             cr.stroke()
 
     # ── Interaction ────────────────────────────────────────────────────────
