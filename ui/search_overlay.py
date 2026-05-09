@@ -22,6 +22,7 @@ class SearchOverlay:
         self.query         = ""
         self._pb_cache     = {}
         self._scaled_cache = {}
+        self._results_time = 0.0
 
     # ── State ──────────────────────────────────────────────────────────
 
@@ -40,7 +41,15 @@ class SearchOverlay:
         self.loading       = False
         self._pb_cache     = {}
         self._scaled_cache = {}
+        self._results_time = time.time()
         self._on_redraw()
+        GLib.timeout_add(50, self._entrance_pulse)
+
+    def _entrance_pulse(self):
+        if time.time() - self._results_time < 0.7:
+            self._on_redraw()
+            return True
+        return False
 
     def clear(self):
         self.items         = []
@@ -125,14 +134,24 @@ class SearchOverlay:
 
     def _draw_tiles(self, cr, vw, vh, scroll_y):
         positions, R = sr_item_positions(len(self.items), vw, vh, scroll_y)
-        draw_r = R - BEVEL
+        now = time.time()
 
         for i, item in enumerate(self.items):
             cx, cy = positions[i]
             if cy + R < scroll_y or cy - R > scroll_y + vh:
                 continue
 
-            sel = (i == self.selected)
+            # Staggered entrance: tiles wave in with 40ms stagger, 200ms rise each
+            entrance_t = min(1.0, max(0.0, (now - self._results_time - i * 0.04) * 5))
+            if entrance_t <= 0:
+                continue
+
+            sel    = (i == self.selected)
+            draw_r = (R - BEVEL) * (1.1 if sel else 1.0)
+
+            use_group = entrance_t < 1.0
+            if use_group:
+                cr.push_group()
 
             cr.set_source_rgba(*(THEME['tile_sel_bg'] if sel else THEME['tile_bg']))
             hex_path(cr, cx, cy, draw_r)
@@ -201,3 +220,7 @@ class SearchOverlay:
                 te = cr.text_extents(meta)
                 cr.move_to(cx - te.width / 2 - te.x_bearing, cy + R * 0.60)
                 cr.show_text(meta)
+
+            if use_group:
+                cr.pop_group_to_source()
+                cr.paint_with_alpha(entrance_t)

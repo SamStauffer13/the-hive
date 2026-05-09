@@ -67,7 +67,9 @@ class HiveGrid(Gtk.DrawingArea):
         self._petal_rings = 0
 
         # Gravity search — matched cells snap to center spiral
-        self._gravity_pos = {}   # item_idx → (world_x, world_y)
+        self._gravity_pos = {}   # item_idx → target (world_x, world_y)
+        self._display_pos = {}   # item_idx → animated (world_x, world_y)
+        self._item_alpha  = {}   # item_idx → animated alpha (1.0=visible, 0.08=faded)
 
         # Zoom transition — 0.0 = star map (all items visible), 1.0 = normal browse
         self._zoom           = 0.0
@@ -96,8 +98,20 @@ class HiveGrid(Gtk.DrawingArea):
     def _pulse(self):
         self.preview.pulse()
         if self.query:
+            self._animate_search()
             self.queue_draw()
         return True
+
+    def _animate_search(self):
+        """Per-tick lerp: gravity positions + unmatched fade. Called at 50ms intervals."""
+        speed = 0.35
+        for item_idx, (tx, ty) in self._gravity_pos.items():
+            cx, cy = self._display_pos.get(item_idx, (tx, ty))
+            self._display_pos[item_idx] = (cx + (tx - cx) * speed, cy + (ty - cy) * speed)
+        for i in range(len(self.all_items)):
+            target = 1.0 if i in self._matched else 0.08
+            cur    = self._item_alpha.get(i, 1.0)
+            self._item_alpha[i] = cur + (target - cur) * speed
 
     # ── Zoom transition ──────────────────────────────────────────────────
 
@@ -400,6 +414,9 @@ class HiveGrid(Gtk.DrawingArea):
             scx, scy = cx + vw / 2, cy + vh / 2
             if scy + r < 0 or scy - r > vh or scx + r < 0 or scx - r > vw:
                 continue
+            fade_a = self._item_alpha.get(i, 1.0)
+            if fade_a < 0.01:
+                continue
             cr.save()
             hex_path(cr, cx, cy, cell_r)
             cr.clip()
@@ -412,7 +429,7 @@ class HiveGrid(Gtk.DrawingArea):
                     Gdk.cairo_set_source_pixbuf(cr, spb,
                         cx - spb.get_width()  / 2,
                         cy - spb.get_height() / 2)
-                    cr.paint_with_alpha(0.08)
+                    cr.paint_with_alpha(fade_a)
                     _desat(cr)
             cr.restore()
 
@@ -422,8 +439,8 @@ class HiveGrid(Gtk.DrawingArea):
                 continue
             rank      = rank_of.get(i, -1)
             in_flower = 0 <= rank < flower_count
-            cx, cy    = self._gravity_pos.get(i, pos[i])
-            alpha     = 1.0 if in_flower else 0.55
+            cx, cy    = self._display_pos.get(i, self._gravity_pos.get(i, pos[i]))
+            alpha     = self._item_alpha.get(i, 1.0) * (1.0 if in_flower else 0.55)
             scx, scy  = cx + vw / 2, cy + vh / 2
             if scy + r < 0 or scy - r > vh or scx + r < 0 or scx - r > vw:
                 continue
@@ -453,12 +470,12 @@ class HiveGrid(Gtk.DrawingArea):
 
         # Text floats above the flower — top of cluster ≈ -(1.5*r*rings + cell_r)
         flower_top = -(1.5 * r * effective_rings + cell_r)
-        self._draw_floating_search(cr, flower_top, effective_rings)
+        self._draw_floating_search(cr, flower_top, effective_rings, len(self.visible))
 
         cr.restore()
 
-    def _draw_floating_search(self, cr, flower_top_y, rings):
-        """Query text + cursor floating above the flower cluster."""
+    def _draw_floating_search(self, cr, flower_top_y, rings, match_count):
+        """Query text + cursor + match count floating above the flower cluster."""
         font_size = max(22, 20 + rings * 12)
         cr.select_font_face('CYBERHYPE', 0, 0)
         cr.set_font_size(font_size)
@@ -478,6 +495,20 @@ class HiveGrid(Gtk.DrawingArea):
             cr.move_to(cur_x, ty + te.y_bearing - 2)
             cr.line_to(cur_x, ty + te.y_bearing + te.height + 2)
             cr.stroke()
+
+        # Match count — just above the flower top
+        if match_count == 0:
+            count_str = "no match"
+        elif match_count == 1:
+            count_str = "1 match"
+        else:
+            count_str = f"{match_count} matches"
+        cr.select_font_face('Nova Mono', 0, 0)
+        cr.set_font_size(13)
+        cr.set_source_rgba(*THEME['text_dim'])
+        te_c = cr.text_extents(count_str)
+        cr.move_to(-te_c.width / 2 - te_c.x_bearing, flower_top_y - 4)
+        cr.show_text(count_str)
 
     # ── Interaction ────────────────────────────────────────────────────────
 
@@ -661,9 +692,11 @@ class HiveGrid(Gtk.DrawingArea):
         vw, vh        = self._viewport_size()
 
         if not query:
-            self.visible         = list(range(len(self.all_items)))
+            self.visible      = list(range(len(self.all_items)))
             self._matched     = set()
             self._gravity_pos = {}
+            self._display_pos.clear()
+            self._item_alpha.clear()
         else:
             q       = query.lower()
             matched = []
@@ -684,6 +717,11 @@ class HiveGrid(Gtk.DrawingArea):
             if matched:
                 tgt_pos, _ = positions(len(matched), vw, vh)
                 self._gravity_pos = {item_idx: tgt_pos[rank] for rank, item_idx in enumerate(matched)}
+                # Init display_pos for newly matched items — start from home position
+                home_pos, _ = self._get_positions()
+                for item_idx in matched:
+                    if item_idx not in self._display_pos:
+                        self._display_pos[item_idx] = home_pos[item_idx] if item_idx < len(home_pos) else (0.0, 0.0)
             else:
                 self._gravity_pos = {}
 
