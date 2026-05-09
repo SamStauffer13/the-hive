@@ -64,12 +64,10 @@ class HiveGrid(Gtk.DrawingArea):
         self._hovered       = None   # (q, s) or None
 
         self._matched     = set()
-        self._petal_rings = 0
+        self._petal_rings = 1
 
-        # Gravity search — matched cells snap to center spiral
-        self._gravity_pos = {}   # item_idx → target (world_x, world_y)
-        self._display_pos = {}   # item_idx → animated (world_x, world_y)
-        self._item_alpha  = {}   # item_idx → animated alpha (1.0=visible, 0.08=faded)
+        self._gravity_pos = {}   # item_idx → (world_x, world_y) in filter mode
+        self._item_alpha  = {}   # item_idx → alpha (1.0=visible, 0.08=faded)
 
         # Zoom transition — 0.0 = star map (all items visible), 1.0 = normal browse
         self._zoom           = 0.0
@@ -103,11 +101,8 @@ class HiveGrid(Gtk.DrawingArea):
         return True
 
     def _animate_search(self):
-        """Per-tick lerp: gravity positions + unmatched fade. Called at 50ms intervals."""
+        """Per-tick fade for unmatched items. Positions snap immediately on filter."""
         speed = 0.35
-        for item_idx, (tx, ty) in self._gravity_pos.items():
-            cx, cy = self._display_pos.get(item_idx, (tx, ty))
-            self._display_pos[item_idx] = (cx + (tx - cx) * speed, cy + (ty - cy) * speed)
         for i in range(len(self.all_items)):
             target = 1.0 if i in self._matched else 0.08
             cur    = self._item_alpha.get(i, 1.0)
@@ -115,13 +110,24 @@ class HiveGrid(Gtk.DrawingArea):
 
     # ── Zoom transition ──────────────────────────────────────────────────
 
+    def _flower_r_sub(self):
+        """Smallest r_sub such that a 7-sub-cluster flower covers all items."""
+        n = len(self.all_items)
+        r_sub = 1
+        while 7 * (1 + 3 * r_sub * (r_sub + 1)) < n:
+            r_sub += 1
+        return r_sub
+
     def _effective_r(self, vh):
         """Cell radius lerped from star-map size → normal size (ease-out cubic)."""
         n = len(self.all_items)
         if not n:
             return radius(vh)
         vw, _ = self._viewport_size()
-        r0 = radius_for_n(n, vw, vh)
+        # Flower extent = 3*r_sub rings — use that as the star-map bounding size
+        r_sub = self._flower_r_sub()
+        outer = 3 * r_sub
+        r0 = radius_for_n(1 + 3 * outer * (outer + 1), vw, vh)
         r1 = radius(vh)
         t  = 1.0 - (1.0 - self._zoom) ** 3
         return r0 + (r1 - r0) * t
@@ -181,8 +187,8 @@ class HiveGrid(Gtk.DrawingArea):
         key = (id(raw), round(super_r))
         pb  = self._scaled_cache.get(key)
         if pb is None:
-            fw    = int(2 * super_r)
-            scale = max(fw / raw.get_width(), fw / raw.get_height())
+            fw    = math.ceil(2 * super_r) + 2   # +2 margin avoids subpixel edge gaps
+            scale = min(fw / raw.get_width(), fw / raw.get_height())
             pb    = raw.scale_simple(
                 max(1, int(raw.get_width()  * scale)),
                 max(1, int(raw.get_height() * scale)),
@@ -214,7 +220,7 @@ class HiveGrid(Gtk.DrawingArea):
         """Filter mode only — finite spiral positions."""
         vw, vh = self._viewport_size()
         n   = len(self.all_items)
-        key = (n, vh)
+        key = (n, vw, vh)
         if self._pos_cache is not None and self._pos_cache_key == key:
             return self._pos_cache, radius(vh)
         pos, r              = positions(n, vw, vh)
@@ -271,17 +277,17 @@ class HiveGrid(Gtk.DrawingArea):
         cell_r = r - BEVEL
         sqrt3  = math.sqrt(3)
 
-        # Star-map mode: clip to the finite spiral so items don't tile/repeat
-        n        = len(self.all_items)
-        max_dist = None
+        # Star-map mode: clip to a 6-petal flower (center cluster + 6 petal clusters)
+        n             = len(self.all_items)
+        _flower_clip  = None
         if self._zoom < 0.98 and n > 0:
-            k = 0
-            while 1 + 3 * k * (k + 1) < n:
-                k += 1
-            max_dist = k + 1
+            r_sub    = self._flower_r_sub()
+            _petal_c = 2 * r_sub
+            _PDIRS   = [(_petal_c,0),(0,_petal_c),(-_petal_c,_petal_c),
+                        (-_petal_c,0),(0,-_petal_c),(_petal_c,-_petal_c)]
+            _flower_clip = (r_sub, _PDIRS, r_sub)
 
-        # Petal cells suppressed while zooming in (looks wrong at small r)
-        active_petals = self._petal_rings if self._zoom > 0.8 else 0
+        active_petals = self._petal_rings
         petal_set = set()
         for dq in range(-active_petals, active_petals + 1):
             for ds in range(-active_petals, active_petals + 1):
@@ -313,10 +319,17 @@ class HiveGrid(Gtk.DrawingArea):
             q_lo   = math.floor(-x_half + q_off) - 1
             q_hi   = math.ceil( x_half + q_off)  + 1
             for dq in range(q_lo, q_hi + 1):
-                if max_dist is not None:
-                    cell_dist = max(abs(dq), abs(ds), abs(-dq - ds))
-                    if cell_dist > max_dist:
-                        continue
+                if _flower_clip is not None:
+                    core_r, petal_dirs, petal_r = _flower_clip
+                    if max(abs(dq), abs(ds), abs(dq + ds)) > core_r:
+                        in_petal = False
+                        for pdq, pds in petal_dirs:
+                            odq, ods = dq - pdq, ds - pds
+                            if max(abs(odq), abs(ods), abs(odq + ods)) <= petal_r:
+                                in_petal = True
+                                break
+                        if not in_petal:
+                            continue
                 q  = self._sel_q + dq
                 cx = vw / 2 + sqrt3 * r * (dq + ds / 2)
                 cy = vh / 2 + 1.5 * r * ds
@@ -377,26 +390,20 @@ class HiveGrid(Gtk.DrawingArea):
                     cr.stroke()
 
     def _draw_filter_mode(self, cr, vw, vh):
-        """Gravity filter mode — flower grows with query length, text floats above."""
+        """Filter mode — fixed 1-ring flower at center, matched cells around it."""
         pos, r = self._get_positions()
         cell_r = r - BEVEL
         sqrt3  = math.sqrt(3)
 
-        # Flower expands with query length: 1-3→0 rings, 4-6→1, 7-9→2, 10+→3
-        effective_rings = min(3, (len(self.query) - 1) // 3)
-        flower_count    = min(
-            1 + 3 * effective_rings * (effective_rings + 1),
-            len(self.visible),
-        )
         rank_of = {item_idx: rank for rank, item_idx in enumerate(self.visible)}
 
-        # Flower image: selected match's artwork spans the whole petal cluster
+        # Flower image: selected match's artwork spans the 7-cell cluster
         sel_item_idx = (
             self.visible[self.selected]
             if self.visible and 0 <= self.selected < len(self.visible)
             else -1
         )
-        super_r   = sqrt3 * r * effective_rings + cell_r
+        super_r   = sqrt3 * r + cell_r   # 1-ring flower radius
         flower_pb = None
         if 0 <= sel_item_idx < len(self.all_items):
             raw = self._pb_cache.get(id(self.all_items[sel_item_idx]))
@@ -405,6 +412,20 @@ class HiveGrid(Gtk.DrawingArea):
 
         cr.save()
         cr.translate(vw / 2, vh / 2)
+
+        # Pass 0: full 7-cell flower — always drawn regardless of match count
+        if flower_pb:
+            for fx, fy in pos[:7]:
+                cr.save()
+                hex_path(cr, fx, fy, cell_r)
+                cr.clip()
+                cr.set_source_rgba(*THEME['bg'])
+                cr.paint()
+                Gdk.cairo_set_source_pixbuf(cr, flower_pb,
+                    -flower_pb.get_width()  / 2,
+                    -flower_pb.get_height() / 2)
+                cr.paint_with_alpha(1.0)
+                cr.restore()
 
         # Pass 1: unmatched background
         for i, item in enumerate(self.all_items):
@@ -438,8 +459,8 @@ class HiveGrid(Gtk.DrawingArea):
             if i >= len(pos) or i not in self._matched:
                 continue
             rank      = rank_of.get(i, -1)
-            in_flower = 0 <= rank < flower_count
-            cx, cy    = self._display_pos.get(i, self._gravity_pos.get(i, pos[i]))
+            in_flower = 0 <= rank < 7
+            cx, cy    = self._gravity_pos.get(i, pos[i])
             alpha     = self._item_alpha.get(i, 1.0) * (1.0 if in_flower else 0.55)
             scx, scy  = cx + vw / 2, cy + vh / 2
             if scy + r < 0 or scy - r > vh or scx + r < 0 or scx - r > vw:
@@ -468,21 +489,18 @@ class HiveGrid(Gtk.DrawingArea):
                         _desat(cr)
             cr.restore()
 
-        # Text floats above the flower — top of cluster ≈ -(1.5*r*rings + cell_r)
-        flower_top = -(1.5 * r * effective_rings + cell_r)
-        self._draw_floating_search(cr, flower_top, effective_rings, len(self.visible))
+        self._draw_floating_search(cr, len(self.visible))
 
         cr.restore()
 
-    def _draw_floating_search(self, cr, flower_top_y, rings, match_count):
-        """Query text + cursor + match count floating above the flower cluster."""
-        font_size = max(22, 20 + rings * 12)
+    def _draw_floating_search(self, cr, match_count):
+        """Query text + cursor + match count centered on the flower."""
         cr.select_font_face('CYBERHYPE', 0, 0)
-        cr.set_font_size(font_size)
+        cr.set_font_size(32)
         text = self.query
         te   = cr.text_extents(text)
-        # Baseline sits 16px above the flower top — text ascenders go further up
-        ty = flower_top_y - 16
+        # Center query text on the flower (world origin = flower center)
+        ty = -(te.y_bearing + te.height / 2)
         tx = -te.width / 2 - te.x_bearing
         cr.set_source_rgba(*THEME['text'])
         cr.move_to(tx, ty)
@@ -496,7 +514,7 @@ class HiveGrid(Gtk.DrawingArea):
             cr.line_to(cur_x, ty + te.y_bearing + te.height + 2)
             cr.stroke()
 
-        # Match count — just above the flower top
+        # Match count just below the query text
         if match_count == 0:
             count_str = "no match"
         elif match_count == 1:
@@ -507,7 +525,7 @@ class HiveGrid(Gtk.DrawingArea):
         cr.set_font_size(13)
         cr.set_source_rgba(*THEME['text_dim'])
         te_c = cr.text_extents(count_str)
-        cr.move_to(-te_c.width / 2 - te_c.x_bearing, flower_top_y - 4)
+        cr.move_to(-te_c.width / 2 - te_c.x_bearing, ty + te.height + 10)
         cr.show_text(count_str)
 
     # ── Interaction ────────────────────────────────────────────────────────
@@ -695,7 +713,6 @@ class HiveGrid(Gtk.DrawingArea):
             self.visible      = list(range(len(self.all_items)))
             self._matched     = set()
             self._gravity_pos = {}
-            self._display_pos.clear()
             self._item_alpha.clear()
         else:
             q       = query.lower()
@@ -713,15 +730,16 @@ class HiveGrid(Gtk.DrawingArea):
             self._matched = set(matched)
             self.visible  = matched
 
-            # Gravity: pack matched items into a fresh spiral at world origin
+            # Pack matched items: flower in ring-0+1 (pos 0-6), rest skip ring-2 → ring-3+
+            # Ring-2 left empty as a gap so non-flower cells don't touch the flower edge.
             if matched:
-                tgt_pos, _ = positions(len(matched), vw, vh)
-                self._gravity_pos = {item_idx: tgt_pos[rank] for rank, item_idx in enumerate(matched)}
-                # Init display_pos for newly matched items — start from home position
-                home_pos, _ = self._get_positions()
-                for item_idx in matched:
-                    if item_idx not in self._display_pos:
-                        self._display_pos[item_idx] = home_pos[item_idx] if item_idx < len(home_pos) else (0.0, 0.0)
+                _RING2_END = 19   # positions 0-6: ring-0+1 (flower), 7-18: ring-2 (skipped)
+                total_needed = max(7, _RING2_END + max(0, len(matched) - 7))
+                tgt_pos, _   = positions(total_needed, vw, vh)
+                self._gravity_pos = {}
+                for rank, item_idx in enumerate(matched):
+                    pos_idx = rank if rank < 7 else _RING2_END + (rank - 7)
+                    self._gravity_pos[item_idx] = tgt_pos[pos_idx]
             else:
                 self._gravity_pos = {}
 
