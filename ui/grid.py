@@ -110,14 +110,6 @@ class HiveGrid(Gtk.DrawingArea):
 
     # ── Zoom transition ──────────────────────────────────────────────────
 
-    def _flower_r_sub(self):
-        """Smallest r_sub such that a 7-sub-cluster flower covers all items."""
-        n = len(self.all_items)
-        r_sub = 1
-        while 7 * (1 + 3 * r_sub * (r_sub + 1)) < n:
-            r_sub += 1
-        return r_sub
-
     def _effective_r(self, vh):
         """Cell radius lerped from star-map size → normal size (ease-out cubic)."""
         n = len(self.all_items)
@@ -125,7 +117,9 @@ class HiveGrid(Gtk.DrawingArea):
             return radius(vh)
         vw, _ = self._viewport_size()
         # Flower extent = 3*r_sub rings — use that as the star-map bounding size
-        r_sub = self._flower_r_sub()
+        r_sub = 1
+        while 7 * (1 + 3 * r_sub * (r_sub + 1)) < n:
+            r_sub += 1
         outer = 3 * r_sub
         r0 = radius_for_n(1 + 3 * outer * (outer + 1), vw, vh)
         r1 = radius(vh)
@@ -277,15 +271,11 @@ class HiveGrid(Gtk.DrawingArea):
         cell_r = r - BEVEL
         sqrt3  = math.sqrt(3)
 
-        # Star-map mode: clip to a 6-petal flower (center cluster + 6 petal clusters)
-        n             = len(self.all_items)
-        _flower_clip  = None
-        if self._zoom < 0.98 and n > 0:
-            r_sub    = self._flower_r_sub()
-            _petal_c = 2 * r_sub
-            _PDIRS   = [(_petal_c,0),(0,_petal_c),(-_petal_c,_petal_c),
-                        (-_petal_c,0),(0,-_petal_c),(_petal_c,-_petal_c)]
-            _flower_clip = (r_sub, _PDIRS, r_sub)
+        # Spiral fade params — precompute once per frame
+        n         = len(self.all_items)
+        _spiral   = self._zoom < 0.98 and n > 0
+        _max_r    = 0.48 * min(vw, vh) / r   # viewport radius in cell-r units
+        _zoom_t   = 1.0 - (1.0 - self._zoom) ** 3   # ease-out cubic blend
 
         active_petals = self._petal_rings
         petal_set = set()
@@ -319,17 +309,6 @@ class HiveGrid(Gtk.DrawingArea):
             q_lo   = math.floor(-x_half + q_off) - 1
             q_hi   = math.ceil( x_half + q_off)  + 1
             for dq in range(q_lo, q_hi + 1):
-                if _flower_clip is not None:
-                    core_r, petal_dirs, petal_r = _flower_clip
-                    if max(abs(dq), abs(ds), abs(dq + ds)) > core_r:
-                        in_petal = False
-                        for pdq, pds in petal_dirs:
-                            odq, ods = dq - pdq, ds - pds
-                            if max(abs(odq), abs(ods), abs(odq + ods)) <= petal_r:
-                                in_petal = True
-                                break
-                        if not in_petal:
-                            continue
                 q  = self._sel_q + dq
                 cx = vw / 2 + sqrt3 * r * (dq + ds / 2)
                 cy = vh / 2 + 1.5 * r * ds
@@ -350,6 +329,24 @@ class HiveGrid(Gtk.DrawingArea):
                     alpha *= ALPHA_DOWNLOADING_BASE + ALPHA_DOWNLOADING_BASE * (math.sin(time.time() * 1.5) + 1) / 2
                 elif state == S_NOT_INSTALLED:
                     alpha *= ALPHA_DOWNLOADING_BASE
+
+                # Spiral fade — galaxy pattern during star-map zoom
+                if _spiral:
+                    cx_r  = math.sqrt(3) * (dq + ds / 2)
+                    cy_r  = 1.5 * ds
+                    dist  = math.sqrt(cx_r * cx_r + cy_r * cy_r)
+                    if dist < 0.01:
+                        star_a = 1.0
+                    else:
+                        dn     = min(1.0, dist / max(1.0, _max_r))
+                        angle  = math.atan2(cy_r, cx_r)
+                        arm    = 0.5 + 0.5 * math.cos(3.0 * angle - dist * 2.0)
+                        radial = (1.0 - dn) ** 0.6
+                        star_a = max(0.0, radial * (0.2 + 0.8 * arm))
+                    alpha = star_a * (1.0 - _zoom_t) + alpha * _zoom_t
+
+                if alpha < 0.01:
+                    continue
 
                 cr.save()
                 hex_path(cr, cx, cy, cell_r)
@@ -427,9 +424,9 @@ class HiveGrid(Gtk.DrawingArea):
                 cr.paint_with_alpha(1.0)
                 cr.restore()
 
-        # Pass 1: unmatched background
+        # Pass 1: unmatched background — skip flower positions (0-6) so Pass 0 shows through
         for i, item in enumerate(self.all_items):
-            if i >= len(pos) or i in self._matched:
+            if i in self._matched or i < 7:
                 continue
             cx, cy   = pos[i]
             scx, scy = cx + vw / 2, cy + vh / 2
@@ -456,7 +453,7 @@ class HiveGrid(Gtk.DrawingArea):
 
         # Pass 2: matched cells on top
         for i, item in enumerate(self.all_items):
-            if i >= len(pos) or i not in self._matched:
+            if i not in self._matched:
                 continue
             rank      = rank_of.get(i, -1)
             in_flower = 0 <= rank < 7
@@ -718,13 +715,13 @@ class HiveGrid(Gtk.DrawingArea):
             q       = query.lower()
             matched = []
             for i, item in enumerate(self.all_items):
-                name, pos_idx, ok = item['name'].lower(), 0, True
+                name, char_pos, ok = item['name'].lower(), 0, True
                 for ch in q:
-                    p = name.find(ch, pos_idx)
+                    p = name.find(ch, char_pos)
                     if p < 0:
                         ok = False
                         break
-                    pos_idx = p + 1
+                    char_pos = p + 1
                 if ok:
                     matched.append(i)
             self._matched = set(matched)
