@@ -17,6 +17,18 @@ def radius(vh):
     return max(40, vh / (1.5 * (ROWS + 0.5)))
 
 
+def radius_for_n(n, vw, vh):
+    """Compute cell radius so all n items in a hex spiral fit within the viewport."""
+    k = 0
+    while 1 + 3 * k * (k + 1) < n:
+        k += 1
+    if k == 0:
+        return min(vw, vh) / 4
+    r_w = vw / (2 * (math.sqrt(3) * k + 1))
+    r_h = vh / (2 * (1.5 * k + 1))
+    return max(8, min(r_w, r_h) * 0.88)
+
+
 def ncols(vw, r):
     return max(1, int(vw / (math.sqrt(3) * r)) + 1)
 

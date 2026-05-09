@@ -10,7 +10,7 @@ gi.require_version('Gdk', '4.0')
 from gi.repository import Gtk, Gdk, GdkPixbuf, GLib
 
 from .hex_geometry import (
-    radius, positions, axial_to_world, axial_round,
+    radius, radius_for_n, positions, axial_to_world, axial_round,
     hex_path, truncate_text,
     BEVEL,
 )
@@ -69,6 +69,10 @@ class HiveGrid(Gtk.DrawingArea):
         # Gravity search — matched cells snap to center spiral
         self._gravity_pos = {}   # item_idx → (world_x, world_y)
 
+        # Zoom transition — 0.0 = star map (all items visible), 1.0 = normal browse
+        self._zoom           = 0.0
+        self._zoom_animating = False
+
         self.search  = SearchOverlay(self.queue_draw)
         self.preview = PreviewManager(self.queue_draw)
 
@@ -93,6 +97,32 @@ class HiveGrid(Gtk.DrawingArea):
         self.preview.pulse()
         if self.query:
             self.queue_draw()
+        return True
+
+    # ── Zoom transition ──────────────────────────────────────────────────
+
+    def _effective_r(self, vh):
+        """Cell radius lerped from star-map size → normal size (ease-out cubic)."""
+        n = len(self.all_items)
+        if not n:
+            return radius(vh)
+        vw, _ = self._viewport_size()
+        r0 = radius_for_n(n, vw, vh)
+        r1 = radius(vh)
+        t  = 1.0 - (1.0 - self._zoom) ** 3
+        return r0 + (r1 - r0) * t
+
+    def _start_zoom(self):
+        if self._zoom < 1.0 and not self._zoom_animating:
+            self._zoom_animating = True
+            GLib.timeout_add(16, self._tick_zoom)
+
+    def _tick_zoom(self):
+        self._zoom = min(1.0, self._zoom + 0.05)
+        self.queue_draw()
+        if self._zoom >= 1.0:
+            self._zoom_animating = False
+            return False
         return True
 
     # ── Item mapping (infinite tiling) ──────────────────────────────────
@@ -223,17 +253,27 @@ class HiveGrid(Gtk.DrawingArea):
 
     def _draw_infinite(self, cr, vw, vh):
         """Infinite tiling hex grid — browse mode. Selected cell always at center."""
-        r      = radius(vh)
+        r      = self._effective_r(vh)
         cell_r = r - BEVEL
         sqrt3  = math.sqrt(3)
 
-        # Petal cells: set of (dq, ds) within _petal_rings hex distance
+        # Star-map mode: clip to the finite spiral so items don't tile/repeat
+        n        = len(self.all_items)
+        max_dist = None
+        if self._zoom < 0.98 and n > 0:
+            k = 0
+            while 1 + 3 * k * (k + 1) < n:
+                k += 1
+            max_dist = k + 1
+
+        # Petal cells suppressed while zooming in (looks wrong at small r)
+        active_petals = self._petal_rings if self._zoom > 0.8 else 0
         petal_set = set()
-        for dq in range(-self._petal_rings, self._petal_rings + 1):
-            for ds in range(-self._petal_rings, self._petal_rings + 1):
+        for dq in range(-active_petals, active_petals + 1):
+            for ds in range(-active_petals, active_petals + 1):
                 dr   = -dq - ds
                 dist = max(abs(dq), abs(ds), abs(dr))
-                if 0 < dist <= self._petal_rings:
+                if 0 < dist <= active_petals:
                     petal_set.add((dq, ds))
 
         # Preview / flower image for selected + petals
@@ -243,7 +283,7 @@ class HiveGrid(Gtk.DrawingArea):
         if sel_item:
             pb_cur, pb_next, fade_alpha = self.preview.current_frame()
             raw     = pb_cur or self._pb_cache.get(id(sel_item))
-            super_r = sqrt3 * r * self._petal_rings + cell_r
+            super_r = sqrt3 * r * active_petals + cell_r
             if raw:
                 flower_pb = self._get_flower_pb(raw, super_r)
             if pb_next:
@@ -259,6 +299,10 @@ class HiveGrid(Gtk.DrawingArea):
             q_lo   = math.floor(-x_half + q_off) - 1
             q_hi   = math.ceil( x_half + q_off)  + 1
             for dq in range(q_lo, q_hi + 1):
+                if max_dist is not None:
+                    cell_dist = max(abs(dq), abs(ds), abs(-dq - ds))
+                    if cell_dist > max_dist:
+                        continue
                 q  = self._sel_q + dq
                 cx = vw / 2 + sqrt3 * r * (dq + ds / 2)
                 cy = vh / 2 + 1.5 * r * ds
@@ -448,7 +492,7 @@ class HiveGrid(Gtk.DrawingArea):
         if self.query or self.search.is_active():
             return
         vw, vh = self._viewport_size()
-        r      = radius(vh)
+        r      = self._effective_r(vh)
         hov    = self._screen_to_axial(x, y, vw, vh, r)
         if hov != self._hovered:
             self._hovered = hov
@@ -471,7 +515,7 @@ class HiveGrid(Gtk.DrawingArea):
             return
 
         vw, vh = self._viewport_size()
-        r      = radius(vh)
+        r      = self._effective_r(vh)
 
         if self.query:
             pos_list, _ = self._get_positions()
@@ -493,6 +537,7 @@ class HiveGrid(Gtk.DrawingArea):
                     self.activate()
                 return
         else:
+            self._start_zoom()
             q, s = self._screen_to_axial(x, y, vw, vh, r)
             if q != self._sel_q or s != self._sel_s:
                 self._sel_q, self._sel_s = q, s
@@ -553,6 +598,7 @@ class HiveGrid(Gtk.DrawingArea):
                 self._update_pan()
                 self.queue_draw()
         else:
+            self._start_zoom()
             dq, ds         = _AX_DIRS[direction]
             self._sel_q   += dq
             self._sel_s   += ds
