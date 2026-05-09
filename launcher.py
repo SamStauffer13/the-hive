@@ -334,7 +334,7 @@ class TheHive(Gtk.ApplicationWindow):
             ol_results    = f_ol.result()
             steam_results = f_steam.result()
 
-        # Expand TV shows → season tiles; if shows found, drop movie noise
+        # Expand TV shows → season tiles; include movies alongside
         shows  = [r for r in tmdb_results if r.get('type') == T_SHOW]
         movies = [r for r in tmdb_results if r.get('type') != T_SHOW]
         expanded = []
@@ -344,10 +344,8 @@ class TheHive(Gtk.ApplicationWindow):
                 for future in as_completed(futures):
                     seasons = future.result()
                     expanded.extend(seasons if seasons else [futures[future]])
-        else:
-            expanded = movies
 
-        results = expanded + ol_results + steam_results
+        results = expanded + movies + ol_results + steam_results
 
         if not results:
             GLib.idle_add(self.grid.search.set_results, [], query)

@@ -38,6 +38,7 @@ def search(query):
                 'state':        S_NOT_INSTALLED,
                 'media_result': True,
                 'tmdb_id':      item.get('id'),
+                'source':       'Movie' if media_type == 'movie' else 'Show',
             })
     except Exception as e:
         print(f"TMDB search failed: {e}")
@@ -76,6 +77,7 @@ def fetch_seasons(show_item):
                 'season_result': True,
                 'season_number': sn,
                 'show_name':     name,
+                'source':        'Show',
             })
     except Exception as e:
         print(f"TMDB season fetch failed: {e}")

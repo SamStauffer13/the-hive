@@ -213,6 +213,7 @@ class SearchOverlay:
             parts = []
             if item.get('size'):    parts.append(item['size'])
             if seeders:             parts.append(f'{seeders}↑')
+            if not parts and item.get('author'): parts.append(item['author'])
             meta = '  ·  '.join(parts)
             if meta:
                 cr.set_font_size(11)

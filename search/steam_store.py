@@ -16,7 +16,7 @@ def search(query):
         with urllib.request.urlopen(req, timeout=5) as r:
             items = json.loads(r.read()).get('items', [])
         for item in items[:9]:
-            if item.get('type') != 'game':
+            if item.get('type') not in ('game', 'app'):
                 continue
             appid = str(item['id'])
             name  = item.get('name', '')
@@ -31,6 +31,7 @@ def search(query):
                 'data':         appid,
                 'state':        game_state(appid),
                 'media_result': True,
+                'source':       'Steam',
             })
     except Exception as e:
         print(f"Steam store search failed: {e}")

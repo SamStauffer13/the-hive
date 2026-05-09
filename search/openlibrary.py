@@ -30,6 +30,7 @@ def search(query):
                 'data':         None,
                 'state':        S_NOT_INSTALLED,
                 'media_result': True,
+                'source':       'Book',
             })
     except Exception as e:
         print(f"Open Library search failed: {e}")
