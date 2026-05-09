@@ -265,6 +265,9 @@ class HiveGrid(Gtk.DrawingArea):
         else:
             self._draw_infinite(cr, vw, vh)
 
+        if self.search.is_active():
+            self.search.draw(cr, vw, vh, 0)
+
     def _draw_infinite(self, cr, vw, vh):
         """Infinite tiling hex grid — browse mode. Selected cell always at center."""
         r      = self._effective_r(vh)
@@ -485,6 +488,24 @@ class HiveGrid(Gtk.DrawingArea):
                         cr.paint_with_alpha(alpha)
                         _desat(cr)
             cr.restore()
+
+        # Selection ring — highlight the selected outer cell so navigation is obvious
+        sel_rank = self.selected
+        if 0 <= sel_rank < len(self.visible):
+            sel_idx  = self.visible[sel_rank]
+            in_flower = sel_rank < 7
+            if not in_flower:
+                cx, cy = self._gravity_pos.get(sel_idx, (0.0, 0.0))
+                # Outer glow
+                hex_path(cr, cx, cy, cell_r + 7)
+                cr.set_source_rgba(1.0, 1.0, 1.0, 0.20)
+                cr.set_line_width(10)
+                cr.stroke()
+                # Sharp white ring
+                hex_path(cr, cx, cy, cell_r + 3)
+                cr.set_source_rgba(1.0, 1.0, 1.0, 0.95)
+                cr.set_line_width(3)
+                cr.stroke()
 
         self._draw_floating_search(cr, len(self.visible))
 
@@ -724,6 +745,16 @@ class HiveGrid(Gtk.DrawingArea):
                     char_pos = p + 1
                 if ok:
                     matched.append(i)
+            # Sort by fuzzy relevance: tightest span first, earliest start first
+            def _score(i):
+                name = self.all_items[i]['name'].lower()
+                pos, first = -1, -1
+                for ch in q:
+                    p = name.find(ch, pos + 1)
+                    if first < 0: first = p
+                    pos = p
+                return (pos - first, first)
+            matched.sort(key=_score)
             self._matched = set(matched)
             self.visible  = matched
 
