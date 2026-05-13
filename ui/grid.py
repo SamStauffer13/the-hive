@@ -63,11 +63,16 @@ class HiveGrid(Gtk.DrawingArea):
         self._pan_y         = 0.0
         self._hovered       = None   # (q, s) or None
 
-        self._matched     = set()
-        self._petal_rings = 1
+        self._matched           = set()
+        self._petal_rings       = 1
+        self._unmatched_indices = []   # precomputed: indices ≥7 not in _matched
 
         self._gravity_pos = {}   # item_idx → (world_x, world_y) in filter mode
         self._item_alpha  = {}   # item_idx → alpha (1.0=visible, 0.08=faded)
+        self._last_blink  = -1   # cursor blink state for smart redraw
+
+        self._online_mode  = False   # True while showing online search results
+        self._saved_state  = None    # snapshot of library state during online mode
 
         # Zoom transition — 0.0 = star map (all items visible), 1.0 = normal browse
         self._zoom           = 0.0
@@ -96,17 +101,26 @@ class HiveGrid(Gtk.DrawingArea):
     def _pulse(self):
         self.preview.pulse()
         if self.query:
-            self._animate_search()
-            self.queue_draw()
+            dirty = self._animate_search()
+            blink = int(time.time() * 2) % 2
+            if dirty or blink != self._last_blink:
+                self._last_blink = blink
+                self.queue_draw()
         return True
 
     def _animate_search(self):
-        """Per-tick fade for unmatched items. Positions snap immediately on filter."""
+        """Per-tick fade for unmatched items. Returns True while any alpha is still moving."""
         speed = 0.35
+        dirty = False
         for i in range(len(self.all_items)):
             target = 1.0 if i in self._matched else 0.08
             cur    = self._item_alpha.get(i, 1.0)
-            self._item_alpha[i] = cur + (target - cur) * speed
+            if abs(cur - target) > 0.005:
+                self._item_alpha[i] = cur + (target - cur) * speed
+                dirty = True
+            else:
+                self._item_alpha[i] = target
+        return dirty
 
     # ── Zoom transition ──────────────────────────────────────────────────
 
@@ -182,7 +196,7 @@ class HiveGrid(Gtk.DrawingArea):
         pb  = self._scaled_cache.get(key)
         if pb is None:
             fw    = math.ceil(2 * super_r) + 2   # +2 margin avoids subpixel edge gaps
-            scale = min(fw / raw.get_width(), fw / raw.get_height())
+            scale = max(fw / raw.get_width(), fw / raw.get_height())
             pb    = raw.scale_simple(
                 max(1, int(raw.get_width()  * scale)),
                 max(1, int(raw.get_height() * scale)),
@@ -197,6 +211,11 @@ class HiveGrid(Gtk.DrawingArea):
             pb = self._pb_cache.get(id(item))
             if pb is None:
                 return None
+            if len(self._scaled_cache) > 400:
+                # Evict oldest half to keep memory bounded
+                keys = list(self._scaled_cache.keys())
+                for k in keys[:len(keys) // 2]:
+                    del self._scaled_cache[k]
             self._scaled_cache[key] = scale_pixbuf_for_hex(pb, draw_r)
         return self._scaled_cache[key]
 
@@ -239,13 +258,68 @@ class HiveGrid(Gtk.DrawingArea):
         if not pos:
             self._pan_x = self._pan_y = 0.0
             return
-        idx = self.visible[self.selected] if (self.query and 0 <= self.selected < len(self.visible)) else self.selected
+        idx = self.visible[self.selected] if ((self.query or self._online_mode) and 0 <= self.selected < len(self.visible)) else self.selected
         if 0 <= idx < len(pos):
             cx, cy      = pos[idx]
             self._pan_x = vw / 2 - cx
             self._pan_y = vh / 2 - cy
         else:
             self._pan_x = self._pan_y = 0.0
+
+    # ── Online results (inject into filter mode) ─────────────────────────
+
+    def show_results(self, items):
+        """Swap in online search results, render them in flower+ring layout."""
+        vw, vh = self._viewport_size()
+        if not self._online_mode:
+            self._saved_state = {
+                'all_items':         self.all_items,
+                'visible':           self.visible,
+                'matched':           self._matched,
+                'gravity_pos':       self._gravity_pos,
+                'item_alpha':        dict(self._item_alpha),
+                'unmatched_indices': self._unmatched_indices,
+                'selected':          self.selected,
+            }
+        self._online_mode       = True
+        self.all_items          = items
+        self.visible            = list(range(len(items)))
+        self._matched           = set(range(len(items)))
+        self.selected           = 0
+        self._item_alpha.clear()
+        self._unmatched_indices = []
+        if items:
+            from .hex_geometry import positions
+            total = max(7, 6 + len(items))
+            pos, _ = positions(total, vw, vh)
+            self._gravity_pos = {
+                i: pos[0 if i == 0 else 6 + i]
+                for i in range(len(items))
+            }
+        else:
+            self._gravity_pos = {}
+        self._invalidate_layout()
+        self._update_pan(vw, vh)
+        threading.Thread(target=self._load_pixbufs_async, args=(items,), daemon=True).start()
+        self.queue_draw()
+
+    def clear_results(self):
+        """Restore library state after online search."""
+        if not self._online_mode or self._saved_state is None:
+            return
+        s = self._saved_state
+        self.all_items          = s['all_items']
+        self.visible            = s['visible']
+        self._matched           = s['matched']
+        self._gravity_pos       = s['gravity_pos']
+        self._item_alpha        = s['item_alpha']
+        self._unmatched_indices = s['unmatched_indices']
+        self.selected           = s['selected']
+        self._online_mode       = False
+        self._saved_state       = None
+        self._invalidate_layout()
+        self._update_pan()
+        self.queue_draw()
 
     # ── Drawing ───────────────────────────────────────────────────────────
 
@@ -259,13 +333,14 @@ class HiveGrid(Gtk.DrawingArea):
         cr.paint()
 
         vw, vh = width, height
-        if self.query:
+        if self.query or self._online_mode:
             self._update_pan(vw, vh)
             self._draw_filter_mode(cr, vw, vh)
         else:
             self._draw_infinite(cr, vw, vh)
 
-        if self.search.is_active():
+        # Loading spinner still uses the overlay; results go through the grid
+        if self.search.loading:
             self.search.draw(cr, vw, vh, 0)
 
     def _draw_infinite(self, cr, vw, vh):
@@ -306,6 +381,9 @@ class HiveGrid(Gtk.DrawingArea):
         s_range = math.ceil((vh / 2 + r) / (1.5 * r)) + 1
         x_half  = (vw / 2 + r) / (sqrt3 * r) + 1
 
+        _now          = time.time()
+        _download_pulse = ALPHA_DOWNLOADING_BASE * (math.sin(_now * 1.5) + 1) / 2
+
         for ds in range(-s_range, s_range + 1):
             s      = self._sel_s + ds
             q_off  = -ds / 2
@@ -329,7 +407,7 @@ class HiveGrid(Gtk.DrawingArea):
 
                 state = item.get('state', S_INSTALLED)
                 if state == S_DOWNLOADING:
-                    alpha *= ALPHA_DOWNLOADING_BASE + ALPHA_DOWNLOADING_BASE * (math.sin(time.time() * 1.5) + 1) / 2
+                    alpha *= ALPHA_DOWNLOADING_BASE + _download_pulse
                 elif state == S_NOT_INSTALLED:
                     alpha *= ALPHA_DOWNLOADING_BASE
 
@@ -428,9 +506,8 @@ class HiveGrid(Gtk.DrawingArea):
                 cr.restore()
 
         # Pass 1: unmatched background — skip flower positions (0-6) so Pass 0 shows through
-        for i, item in enumerate(self.all_items):
-            if i in self._matched or i < 7:
-                continue
+        for i in self._unmatched_indices:
+            item     = self.all_items[i]
             cx, cy   = pos[i]
             scx, scy = cx + vw / 2, cy + vh / 2
             if scy + r < 0 or scy - r > vh or scx + r < 0 or scx - r > vw:
@@ -455,14 +532,16 @@ class HiveGrid(Gtk.DrawingArea):
             cr.restore()
 
         # Pass 2: matched cells on top
+        sel_rank = self.selected
         for i, item in enumerate(self.all_items):
             if i not in self._matched:
                 continue
-            rank      = rank_of.get(i, -1)
-            in_flower = 0 <= rank < 7
-            cx, cy    = self._gravity_pos.get(i, pos[i])
-            alpha     = self._item_alpha.get(i, 1.0) * (1.0 if in_flower else 0.55)
-            scx, scy  = cx + vw / 2, cy + vh / 2
+            rank        = rank_of.get(i, -1)
+            in_flower   = rank == 0
+            is_selected = rank == sel_rank
+            cx, cy      = self._gravity_pos.get(i, pos[i])
+            alpha       = self._item_alpha.get(i, 1.0) * (1.0 if (in_flower or is_selected) else 0.55)
+            scx, scy    = cx + vw / 2, cy + vh / 2
             if scy + r < 0 or scy - r > vh or scx + r < 0 or scx - r > vw:
                 continue
             cr.save()
@@ -471,7 +550,7 @@ class HiveGrid(Gtk.DrawingArea):
             cr.set_source_rgba(*THEME['bg'])
             cr.paint()
             if in_flower and flower_pb:
-                # Flower image centered at world origin — same as browse mode
+                # Selected item only: spanning flower image across all 7 cells
                 Gdk.cairo_set_source_pixbuf(cr, flower_pb,
                     -flower_pb.get_width()  / 2,
                     -flower_pb.get_height() / 2)
@@ -486,28 +565,13 @@ class HiveGrid(Gtk.DrawingArea):
                             cx - spb.get_width()  / 2,
                             cy - spb.get_height() / 2)
                         cr.paint_with_alpha(alpha)
-                        _desat(cr)
+                        if not is_selected:
+                            _desat(cr)
             cr.restore()
 
-        # Selection ring — highlight the selected outer cell so navigation is obvious
-        sel_rank = self.selected
-        if 0 <= sel_rank < len(self.visible):
-            sel_idx  = self.visible[sel_rank]
-            in_flower = sel_rank < 7
-            if not in_flower:
-                cx, cy = self._gravity_pos.get(sel_idx, (0.0, 0.0))
-                # Outer glow
-                hex_path(cr, cx, cy, cell_r + 7)
-                cr.set_source_rgba(1.0, 1.0, 1.0, 0.20)
-                cr.set_line_width(10)
-                cr.stroke()
-                # Sharp white ring
-                hex_path(cr, cx, cy, cell_r + 3)
-                cr.set_source_rgba(1.0, 1.0, 1.0, 0.95)
-                cr.set_line_width(3)
-                cr.stroke()
 
-        self._draw_floating_search(cr, len(self.visible))
+        if not self._online_mode and not self.search.loading:
+            self._draw_floating_search(cr, len(self.visible))
 
         cr.restore()
 
@@ -699,9 +763,10 @@ class HiveGrid(Gtk.DrawingArea):
         return None, -1
 
     def set_items(self, items, selected=0, keep_cache=False):
-        self.all_items = items
-        self.visible   = list(range(len(items)))
-        self.selected  = min(selected, max(0, len(items) - 1))
+        self.all_items          = items
+        self.visible            = list(range(len(items)))
+        self.selected           = min(selected, max(0, len(items) - 1))
+        self._unmatched_indices = []
         if not keep_cache:
             self._sel_q = 0
             self._sel_s = 0
@@ -758,19 +823,20 @@ class HiveGrid(Gtk.DrawingArea):
             self._matched = set(matched)
             self.visible  = matched
 
-            # Pack matched items: flower in ring-0+1 (pos 0-6), rest skip ring-2 → ring-3+
-            # Ring-2 left empty as a gap so non-flower cells don't touch the flower edge.
+            # Rank 0 → center (pos 0). Ranks 1+ → ring 2 (pos 7+), skipping ring 1.
             if matched:
-                _RING2_END = 19   # positions 0-6: ring-0+1 (flower), 7-18: ring-2 (skipped)
-                total_needed = max(7, _RING2_END + max(0, len(matched) - 7))
+                total_needed = max(7, 6 + len(matched))
                 tgt_pos, _   = positions(total_needed, vw, vh)
-                self._gravity_pos = {}
-                for rank, item_idx in enumerate(matched):
-                    pos_idx = rank if rank < 7 else _RING2_END + (rank - 7)
-                    self._gravity_pos[item_idx] = tgt_pos[pos_idx]
+                self._gravity_pos = {
+                    item_idx: tgt_pos[0 if rank == 0 else 6 + rank]
+                    for rank, item_idx in enumerate(matched)
+                }
             else:
                 self._gravity_pos = {}
 
+        self._unmatched_indices = [
+            i for i in range(7, len(self.all_items)) if i not in self._matched
+        ]
         self.selected = 0
         if was_filtering != bool(query):
             self._invalidate_layout()
@@ -785,9 +851,10 @@ class HiveGrid(Gtk.DrawingArea):
         item = self.all_items.pop(item_idx)
         self._pb_cache.pop(id(item), None)
         self._scaled_cache = {k: v for k, v in self._scaled_cache.items() if k[0] != id(item)}
-        self.visible  = [i if i < item_idx else i - 1 for i in self.visible if i != item_idx]
-        self._matched = {i if i < item_idx else i - 1 for i in self._matched if i != item_idx}
-        self.selected = min(self.selected, max(0, len(self.visible) - 1))
+        self.visible            = [i if i < item_idx else i - 1 for i in self.visible if i != item_idx]
+        self._matched           = {i if i < item_idx else i - 1 for i in self._matched if i != item_idx}
+        self._unmatched_indices = [i for i in range(7, len(self.all_items)) if i not in self._matched]
+        self.selected           = min(self.selected, max(0, len(self.visible) - 1))
         self._invalidate_layout()
         self._update_size()
         self._update_pan()

@@ -32,6 +32,13 @@ class SearchOverlay:
         self.selected = 0
         self.loading  = True
         self._on_redraw()
+        GLib.timeout_add(40, self._loading_pulse)
+
+    def _loading_pulse(self):
+        if not self.loading:
+            return False
+        self._on_redraw()
+        return True
 
     def set_results(self, items, query):
         if self.query != query:
@@ -50,6 +57,11 @@ class SearchOverlay:
             self._on_redraw()
             return True
         return False
+
+    def set_loading_done(self):
+        """Stop loading spinner without showing results (grid handles display)."""
+        self.loading = False
+        self._on_redraw()
 
     def clear(self):
         self.items         = []
@@ -110,19 +122,20 @@ class SearchOverlay:
         self._draw_tiles(cr, vw, vh, scroll_y)
 
     def _draw_loading(self, cr, vw, vh):
-        pulse = 0.6 + 0.4 * (math.sin(time.time() * 2.5) + 1) / 2
-        r, g, b, _ = THEME['text']
-        cr.select_font_face('CYBERHYPE', 0, 0)
-        cr.set_font_size(28)
-        cr.set_source_rgba(r, g, b, pulse)
-        te = cr.text_extents('SEARCHING')
-        cr.move_to((vw - te.width) / 2 - te.x_bearing, vh / 2 - te.height / 2 - te.y_bearing)
-        cr.show_text('SEARCHING')
-        dots = '.' * (int(time.time() * 2) % 4)
-        cr.set_font_size(20)
-        te2 = cr.text_extents(dots or ' ')
-        cr.move_to((vw - te2.width) / 2 - te2.x_bearing, vh / 2 + 30)
-        cr.show_text(dots)
+        cx, cy = vw / 2, vh / 2
+        t  = time.time()
+        ar, ag, ab, _ = THEME['accent']
+        max_r = min(vw, vh) * 0.44
+        for i in range(5):
+            phase = (t * 0.65 + i * 0.20) % 1.0
+            r     = 28 + phase * max_r
+            alpha = (1.0 - phase) ** 1.8 * 0.75
+            if alpha < 0.02:
+                continue
+            hex_path(cr, cx, cy, r)
+            cr.set_source_rgba(ar, ag, ab, alpha)
+            cr.set_line_width(max(1.0, 3.5 * (1.0 - phase)))
+            cr.stroke()
 
     def _draw_empty(self, cr, vw, vh):
         cr.select_font_face('Nova Mono', 0, 0)

@@ -348,10 +348,11 @@ class TheHive(Gtk.ApplicationWindow):
         results = expanded + movies + ol_results + steam_results
 
         if not results:
-            GLib.idle_add(self.grid.search.set_results, [], query)
+            GLib.idle_add(self.grid.search.set_loading_done)
             return
 
-        GLib.idle_add(self.grid.search.set_results, results, query)
+        GLib.idle_add(self.grid.search.set_loading_done)
+        GLib.idle_add(self.grid.show_results, results)
         for item in results:
             if item.get('artwork'):
                 _spawn(self._preload_sr_artwork, item)
@@ -364,9 +365,9 @@ class TheHive(Gtk.ApplicationWindow):
 
     def _run_fetch_seasons(self, show_item):
         seasons = tmdb.fetch_seasons(show_item)
-        name    = show_item['name']
         if seasons:
-            GLib.idle_add(self.grid.search.set_results, seasons, name)
+            GLib.idle_add(self.grid.search.set_loading_done)
+            GLib.idle_add(self.grid.show_results, seasons)
             for s in seasons:
                 if s.get('artwork_url') and not s.get('artwork'):
                     _spawn(self._fetch_sr_artwork, s)
@@ -426,10 +427,11 @@ class TheHive(Gtk.ApplicationWindow):
             raw = self._execute_torrent_queries(queries, category)
         except Exception as e:
             print(f"qBit search failed: {e}")
-            GLib.idle_add(self.grid.search.set_results, [], queries[0])
+            GLib.idle_add(self.grid.search.set_loading_done)
             return
         results = self._format_torrent_results(raw, item_type, artwork, artwork_url)
-        GLib.idle_add(self.grid.search.set_results, results, queries[0])
+        GLib.idle_add(self.grid.search.set_loading_done)
+        GLib.idle_add(self.grid.show_results, results)
         if artwork_url and not artwork:
             _spawn(self._fetch_shared_artwork, results, artwork_url)
 
@@ -441,7 +443,7 @@ class TheHive(Gtk.ApplicationWindow):
             return
         try:
             pb = GdkPixbuf.Pixbuf.new_from_file(path)
-            GLib.idle_add(self.grid.search.store_pixbuf, id(item), pb)
+            GLib.idle_add(self.grid._store_pixbuf, id(item), pb)
         except Exception:
             pass
 
@@ -458,7 +460,7 @@ class TheHive(Gtk.ApplicationWindow):
         item['artwork'] = str(cache_path)
         try:
             pb = GdkPixbuf.Pixbuf.new_from_file(str(cache_path))
-            GLib.idle_add(self.grid.search.store_pixbuf, id(item), pb)
+            GLib.idle_add(self.grid._store_pixbuf, id(item), pb)
         except Exception:
             pass
 
@@ -473,12 +475,11 @@ class TheHive(Gtk.ApplicationWindow):
             return
         for item in items:
             item['artwork'] = str(cache_path)
-            GLib.idle_add(self.grid.search.store_pixbuf, id(item), pb)
+            GLib.idle_add(self.grid._store_pixbuf, id(item), pb)
 
     # ── Key input ──────────────────────────────────────────────────────
 
     def _on_key_pressed(self, controller, keyval, keycode, state):
-        print(f'[key] keyval={keyval} query={self.grid.query!r}')
         in_search = self.grid.search.is_active()
 
         _DISPATCH = {
@@ -521,6 +522,8 @@ class TheHive(Gtk.ApplicationWindow):
             return True
 
         if 32 <= keyval <= 126 and not (state & Gdk.ModifierType.CONTROL_MASK):
+            if self.grid._online_mode:
+                return True  # swallow — don't mutate query while results showing
             if in_search:
                 self.grid.search.clear()
             self.grid.filter(self.grid.query + chr(keyval))
@@ -529,7 +532,10 @@ class TheHive(Gtk.ApplicationWindow):
         return False
 
     def _handle_escape(self, in_search):
-        if in_search:
+        if self.grid._online_mode:
+            self.grid.clear_results()
+            self.grid.search.clear()
+        elif in_search:
             self.grid.search.clear()
         elif self.grid.query:
             self.grid.filter("")
@@ -537,9 +543,21 @@ class TheHive(Gtk.ApplicationWindow):
             self.close()
 
     def _handle_return(self, in_search):
+        if self.grid._online_mode:
+            item, _ = self.grid.get_selected()
+            if item:
+                sel = item
+                if sel.get('type') == T_SHOW and not sel.get('season_result'):
+                    self._fetch_seasons_async(sel)
+                elif sel.get('media_result') and sel['type'] == T_GAME:
+                    self._dispatch_launch(sel)
+                else:
+                    self._dispatch_launch(sel)
+            return
+
         if not in_search:
             if self.grid.query:
-                self._run_media_search_async(self.grid.query)  # always search online
+                self._run_media_search_async(self.grid.query)
             elif self.grid.visible:
                 self.grid.activate()
             return
